@@ -53,6 +53,9 @@ parser.add_option("--numepochs",
 parser.add_option("--outdir",
                   action="store", dest="outdir", default='./',
                   help="directory for output", metavar="string")
+parser.add_option("--nt",
+                  type="int", dest="nt", default=10,
+                  help="number of timesteps", metavar="int")
 (options, args) = parser.parse_args()
 
 
@@ -146,7 +149,11 @@ if (options.builddb):
       # error check
       assert numpytruth.shape[0:2] == (_globalexpectedpixel,_globalexpectedpixel)
       assert nslice  == numpytruth.shape[2]
-      restruth=skimage.transform.resize(numpytruth,(options.trainingresample,options.trainingresample,nslice),order=0,mode='constant',preserve_range=True).astype(SEG_DTYPE)
+      restruth=skimage.transform.resize(numpytruth,
+              (options.trainingresample,options.trainingresample,nslice),
+              order=0,
+              mode='constant',
+              preserve_range=True).astype(SEG_DTYPE)
 
       # bounding box for each label
       if( np.max(restruth) ==1 ) :
@@ -247,57 +254,86 @@ elif (options.trainmodel ):
   ### set up NN
   ###
 
-  from keras.layers import InputLayer, Conv2D, Lambda, Add
+  _nt = options.nt
+  _nx = options.trainingresample
+  _ny = options.trainingresample
+  from keras.layers import Input, Conv2D, LocallyConnected2D, Lambda, Add, Maximum, Minimum, Multiply, Dense, Layer, Activation, BatchNormalization
   from keras.models import Model, Sequential
   import keras.backend as K
 
-  # define np sparse matrix npXP TODO
-  # define np sparse matrix npXN TODO
-  # define np sparse matrix npYP TODO
-  # define np sparse matrix npYN TODO
+ 
+  # create upwind FD kernels
+  kXP = K.constant(np.asarray([[0,0,0],[-1,1,0],[0,0,0]])[:,:,np.newaxis,np.newaxis])
+  kXN = K.constant(np.asarray([[0,0,0],[0,-1,1],[0,0,0]])[:,:,np.newaxis,np.newaxis])
+  kYP = K.constant(np.asarray([[0,0,0],[0,1,0],[0,-1,0]])[:,:,np.newaxis,np.newaxis])
+  kYN = K.constant(np.asarray([[0,1,0],[0,-1,0],[0,0,0]])[:,:,np.newaxis,np.newaxis])
+  blur = K.constant(np.asarray([[0.0625, 0.1250, 0.0625],[0.1250, 0.5000, 0.1250],[0.0625, 0.1250, 0.0625]])[:,:,np.newaxis,np.newaxis])
 
-  # cast matrices as tensors
-  XP = K.constant(npXP)
-  XN = K.constant(npXN)
-  YP = K.constant(npYP)
-  YN = K.constant(npYN)
+  class Conv2D_Kernel(Layer):
+      
+      def __init__(self, kernel, **kwargs):
+          self.kernel = kernel
+          super(Conv2D_Kernel, self).__init__(**kwargs)
 
-  # write layer for sparse stencil operation
-  def multXP_relu(x):
-      Ax  = K.dot(x,XP)
-      return K.relu(Ax)
-  def multXN_relu(x):
-      Ax  = K.dot(-x,XN)
-      return -K.relu(Ax)
-  def multYP_relu(x):
-      Ax  = K.dot(x,YP)
-      return K.relu(Ax)
-  def multYN_relu(x):
-      Ax  = K.dot(-x,YN)
-      return -K.relu(Ax)
+      def build(self, input_shape):
+          super(Conv2D_Kernel, self).build(input_shape)
 
-  def timestep_layer(in_layer):
-      #     stencil multiplications, then ReLu i.e. upwind max
-      xp = Lambda(multXP_relu)(in_layer)
-      xn = Lambda(multXN_relu)(in_layer)
-      yp = Lambda(multYP_relu)(in_layer)
-      yn = Lambda(multYN_relu)(in_layer)
-      #     sum ReLu outputs for each dimension
-      x = Add()([xp,xn])
-      y = Add()([yp,yn])
-      #     1x1 conv
-      #     factors in dt, dx values directly into convolution
-      fx = Conv2D(1, (1,1), padding='same', use_bias=False)(x)
-      fy = Conv2D(1, (1,1), padding='same', use_bias=False)(y)
-      #     add to prev
-      return Add()([in_layer,fx,fy])
+      def call(self, x):
+          return K.conv2d(x, self.kernel, padding='same')
 
-  def get_upwind_transport_net(_nt, _final_sigma='sigmoid', _num_classes=1):
-      in_layer = Input(shape=(crop_size,crop_size,1))
+      def compute_output_shape(self, input_shape):
+          return input_shape
+
+
+  class Weight(Layer):
+
+      def __init__(self, **kwargs):
+          super(Weight, self).__init__(**kwargs)
+
+      def build(self, input_shape):
+          self.kernel = self.add_weight(name='kernel',
+                  shape=input_shape[1:],
+                  initializer='uniform',
+                  trainable=True)
+          super(Weight, self).build(input_shape)
+
+      def call(self, x):
+          return x + self.kernel - x
+
+      def compute_output_shape(self, input_shape):
+          return input_shape
+
+  def get_upwind_transport_net(_nt, _final_sigma='relu', _num_classes=1):
+      in_layer = Input(shape=(_ny,_nx,1))
+      mid_layer = Conv2D_Kernel(blur)(in_layer) # Gaussian blur before starting
       for ttt in range(_nt):
-          in_layer = timestep_layer(in_layer)
-      out_layer = Conv2D(_num_classes, (1,1), activation=_final_sigma)(in_layer)
-      model = Model(inputs=in_layer, outputs=out_layer)
+          
+          xp = Conv2D_Kernel(kXP)(mid_layer)
+          xn = Conv2D_Kernel(kXN)(mid_layer)
+          yp = Conv2D_Kernel(kYP)(mid_layer)
+          yn = Conv2D_Kernel(kYN)(mid_layer)
+
+          fx = Weight()(mid_layer)
+          fy = Weight()(mid_layer)
+
+          fxp       = Activation('relu')(fx)
+          fx_minus  = Lambda(lambda x: -1.0 * x)(fx)
+          fxn_minus = Activation('relu')(fx_minus)
+          fxn       = Lambda(lambda x: -1.0 * x)(fxn_minus)
+          fyp       = Activation('relu')(fy)
+          fy_minus  = Lambda(lambda x: -1.0 * x)(fy)
+          fyn_minus = Activation('relu')(fy_minus)
+          fyn       = Lambda(lambda x: -1.0 * x)(fyn_minus)
+
+          xpp = Multiply()([fxp,xp])
+          xnn = Multiply()([fxn,xn])
+          ypp = Multiply()([fyp,yp])
+          ynn = Multiply()([fyn,yn])
+
+          mid_layer = Add()([mid_layer, xpp, xnn, ypp, ynn])
+
+      out_layer = LocallyConnected2D(_num_classes,kernel_size=(1,1),activation=_final_sigma)(mid_layer)
+      model = Model(in_layer, out_layer)
       return model
 
 
@@ -344,6 +380,8 @@ elif (options.trainmodel ):
   def dice_metric_two(y_true, y_pred):
       batchdiceloss =  dice_imageloss(y_true, y_pred)
       return -batchdiceloss[:,2]
+  def intersect_dice(y_true, y_pred):
+      return 2. *K.abs(y_true*y_pred)
 
 
 
@@ -399,8 +437,9 @@ elif (options.trainmodel ):
   ###
 
   model = get_upwind_transport_net(_nt, _final_sigma='sigmoid', _num_classes=t_max+1)
-  model.compile(loss=dice_imageloss,metrics=[dice_metric_zero,dice_metric_one,dice_metric_two],optimizer=options.trainingsolver)
-
+  model.compile(loss=dice_imageloss,
+        metrics=[dice_metric_zero,dice_metric_one,dice_metric_two],
+        optimizer=options.trainingsolver)
   print("Model parameters: {0:,}".format(model.count_params()))
   print("Input shape: ", x_train[TRAINING_SLICES,:,:,np.newaxis].shape)
   history = model.fit(x_train[TRAINING_SLICES ,:,:,np.newaxis],
@@ -507,14 +546,22 @@ elif (options.predictmodel != None and options.predictimage != None and options.
   assert numpypredict.shape[0:2] == (_glexpx,_glexpx)
   nslice = numpypredict.shape[2]
   print(nslice)
-  resizepredict = skimage.transform.resize(numpypredict,(options.trainingresample,options.trainingresample,nslice ),order=0,preserve_range=True,mode='constant').astype(IMG_DTYPE).transpose(2,1,0)
+  resizepredict = skimage.transform.resize(numpypredict,
+          (options.trainingresample,options.trainingresample,nslice ),
+          order=0,
+          preserve_range=True,
+          mode='constant').astype(IMG_DTYPE).transpose(2,1,0)
 
   # FIXME: @jonasactor - the numlabel will change depending on the training data... can you make this more robust and the number of labels from the model?
   numlabel = 3
 
   segout = loaded_model.predict(resizepredict[:,:,:,np.newaxis] )
   for jjj in range(numlabel):
-      segout_resize = skimage.transform.resize(segout[...,jjj],(nslice,_glexpx,_glexpx),order=0,preserve_range=True,mode='constant').transpose(2,1,0)
+      segout_resize = skimage.transform.resize(segout[...,jjj],
+              (nslice,_glexpx,_glexpx),
+              order=0,
+              preserve_range=True,
+              mode='constant').transpose(2,1,0)
       segout_img = nib.Nifti1Image(segout_resize, None, header=imageheader)
       segout_img.to_filename( options.segmentation.replace('.nii.gz', '-%d.nii.gz' % jjj) )
 
