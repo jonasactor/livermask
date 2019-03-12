@@ -263,77 +263,137 @@ elif (options.trainmodel ):
 
  
   # create upwind FD kernels
-  kXP = K.constant(np.asarray([[0,0,0],[-1,1,0],[0,0,0]])[:,:,np.newaxis,np.newaxis])
-  kXN = K.constant(np.asarray([[0,0,0],[0,-1,1],[0,0,0]])[:,:,np.newaxis,np.newaxis])
-  kYP = K.constant(np.asarray([[0,0,0],[0,1,0],[0,-1,0]])[:,:,np.newaxis,np.newaxis])
-  kYN = K.constant(np.asarray([[0,1,0],[0,-1,0],[0,0,0]])[:,:,np.newaxis,np.newaxis])
+  kXP = K.constant(np.asarray([[-1,1,0]])[:,:,np.newaxis,np.newaxis])
+  kXN = K.constant(np.asarray([[0,-1,1]])[:,:,np.newaxis,np.newaxis])
+  kYP = K.constant(np.asarray([[0],[1],[-1]])[:,:,np.newaxis,np.newaxis])
+  kYN = K.constant(np.asarray([[1],[-1],[0]])[:,:,np.newaxis,np.newaxis])
+  kXC = K.constant(np.asarray([[-1,0,1]])[:,:,np.newaxis,np.newaxis])
+  kYC = K.constant(np.asarray([[1],[0],[-1]])[:,:,np.newaxis,np.newaxis])
+  kXX = K.constant(np.asarray([[-1,2,1]])[:,:,np.newaxis,np.newaxis])
+  kYY = K.constant(np.asarray([[1],[2],[-1]])[:,:,np.newaxis,np.newaxis])
+  kXY = K.constant(np.asarray([[-1,0,1],[0,0,0],[1,0,-1]])[:,:,np.newaxis,np.newaxis])
   blur = K.constant(np.asarray([[0.0625, 0.1250, 0.0625],[0.1250, 0.5000, 0.1250],[0.0625, 0.1250, 0.0625]])[:,:,np.newaxis,np.newaxis])
-
-  class Conv2D_Kernel(Layer):
-      
-      def __init__(self, kernel, **kwargs):
-          self.kernel = kernel
-          super(Conv2D_Kernel, self).__init__(**kwargs)
-
-      def build(self, input_shape):
-          super(Conv2D_Kernel, self).build(input_shape)
-
-      def call(self, x):
-          return K.conv2d(x, self.kernel, padding='same')
-
-      def compute_output_shape(self, input_shape):
-          return input_shape
-
 
   class Weight(Layer):
 
-      def __init__(self, **kwargs):
+      def __init__(self, in_img, **kwargs):
+          self.image = in_img
           super(Weight, self).__init__(**kwargs)
 
       def build(self, input_shape):
           self.kernel = self.add_weight(name='kernel',
                   shape=input_shape[1:],
-                  initializer='uniform',
+                  initializer='normal',
                   trainable=True)
           super(Weight, self).build(input_shape)
 
       def call(self, x):
-          return x + self.kernel - x
+          return x - x + self.kernel
 
       def compute_output_shape(self, input_shape):
           return input_shape
 
+  class ForcingFunction(Layer):
+
+     def __init__(self, in_img, **kwargs):
+         self.image = in_img
+         super(ForcingFunction, self).__init__(**kwargs)
+
+     def build(self, input_shape):
+         self.conv_kernel_x = self.add_weight(name='conv_kernel_x',
+                          shape=(3,3,1,16),
+                          initializer='normal',
+                          trainable=True)
+         self.conv_kernel_y = self.add_weight(name='conv_kernel_y',
+                          shape=(3,3,1,16),
+                          initializer='normal',
+                          trainable=True)
+         self.sep_kernel_depthwise = self.add_weight(name='sep_kernel_depth',
+                          shape=(3,3,1,8),
+                          initializer='normal',
+                          trainable=True)
+         self.sep_kernel_pointwise = self.add_weight(name='sep_kernel_point',
+                          shape=(1,1,8,8),
+                          initializer='normal',
+                          trainable=True)
+         self.conv_kernel_curve_0 = self.add_weight(name='conv_kernel_curve_0',
+                          shape=(5,5,1,8),
+                          initializer='normal',
+                          trainable=True)
+         self.conv_kernel_curve_1 = self.add_weight(name='conv_kernel_curve_1',
+                          shape=(5,5,8,8),
+                          initializer='normal',
+                          trainable=True)
+         super(ForcingFunction, self).build(input_shape)
+
+     def call(self, u):
+        
+          # edge detection (learned filter)
+          edges = K.separable_conv2d(self.image, self.sep_kernel_depthwise, self.sep_kernel_pointwise, padding='same')
+          edges = K.relu(edges)
+          edges = K.sum(edges, axis=-1, keepdims=True)
+          edges = K.softsign(edges)
+ 
+          # grad( edge_detection ) approx (learned filter)
+          grad_edges_x = K.conv2d(edges, self.conv_kernel_x, padding='same')
+          grad_edges_x = K.relu(grad_edges_x)
+          grad_edges_x = K.sum(grad_edges_x, axis=-1, keepdims=True)
+          grad_edges_y = K.conv2d(edges, self.conv_kernel_y, padding='same')
+          grad_edges_y = K.relu(grad_edges_y)
+          grad_edges_y = K.sum(grad_edges_y, axis=-1, keepdims=True)
+
+
+          # upwind approx to grad( edge_detection)^T grad( u )
+          xp = K.conv2d(u, kXP, padding='same')
+          xn = K.conv2d(u, kXN, padding='same')
+          yp = K.conv2d(u, kYP, padding='same')
+          yn = K.conv2d(u, kYN, padding='same')
+          fxp =         K.relu(       grad_edges_x)
+          fxn =  -1.0 * K.relu(-1.0 * grad_edges_x)
+          fyp =         K.relu(       grad_edges_y)
+          fyn =  -1.0 * K.relu(-1.0 * grad_edges_y)
+          xpp = fxp*xp
+          xnn = fxn*xn
+          ypp = fyp*yp
+          ynn = fyn*yn
+
+          # curvature kappa( u ) approx (learned filter)
+          kappa = K.conv2d(u, self.conv_kernel_curve_0, padding='same')
+          kappa = K.conv2d(kappa, self.conv_kernel_curve_1, padding='same')
+          kappa = K.sum(kappa, axis=-1, keepdims=True)
+
+#          uxx = K.conv2d(u, kXX, padding='same')
+#          uyy = K.conv2d(u, kYY, padding='same')
+#          uxy = K.conv2d(u, kXY, padding='same')
+#          uxc = K.conv2d(u, kXC, padding='same')
+#          uyc = K.conv2d(u, kYC, padding='same')
+#          kappa = uxx*(uyc*uyc) - 2.0*(uxc*uyc)*uxy + uyy*(uxc*uxc)
+
+          return u + xpp + xnn + ypp + ynn + edges + kappa
+
+     def compute_output_shape(self, input_shape):
+          return input_shape
+
   def get_upwind_transport_net(_nt, _final_sigma='relu', _num_classes=1):
-      in_layer = Input(shape=(_ny,_nx,1))
-      mid_layer = Conv2D_Kernel(blur)(in_layer) # Gaussian blur before starting
+      in_img  = Input(shape=(_ny,_nx,1))
+
+      # initialization for u_0
+      in_init   = Input(shape=(_ny,_nx,1))
+      mid_layer = Activation('relu')(in_init)
+#      mid_layer = Conv2D(1, (3,3), padding='same')(in_init)
+#      mid_layer = Activation('relu')(mid_layer)
+#      mid_layer = Conv2D(1, (3,3), padding='same')(mid_layer)
+#      mid_layer = Activation('relu')(mid_layer)
+
+      # Forcing Function F depends on image and on  u, but not on time
+      F = ForcingFunction(in_img)
+
       for ttt in range(_nt):
-          
-          xp = Conv2D_Kernel(kXP)(mid_layer)
-          xn = Conv2D_Kernel(kXN)(mid_layer)
-          yp = Conv2D_Kernel(kYP)(mid_layer)
-          yn = Conv2D_Kernel(kYN)(mid_layer)
-
-          fx = Weight()(mid_layer)
-          fy = Weight()(mid_layer)
-
-          fxp       = Activation('relu')(fx)
-          fx_minus  = Lambda(lambda x: -1.0 * x)(fx)
-          fxn_minus = Activation('relu')(fx_minus)
-          fxn       = Lambda(lambda x: -1.0 * x)(fxn_minus)
-          fyp       = Activation('relu')(fy)
-          fy_minus  = Lambda(lambda x: -1.0 * x)(fy)
-          fyn_minus = Activation('relu')(fy_minus)
-          fyn       = Lambda(lambda x: -1.0 * x)(fyn_minus)
-
-          xpp = Multiply()([fxp,xp])
-          xnn = Multiply()([fxn,xn])
-          ypp = Multiply()([fyp,yp])
-          ynn = Multiply()([fyn,yn])
-
-          mid_layer = Add()([mid_layer, xpp, xnn, ypp, ynn])
-
-      out_layer = LocallyConnected2D(_num_classes,kernel_size=(1,1),activation=_final_sigma)(mid_layer)
-      model = Model(in_layer, out_layer)
+          mid_layer = F(mid_layer)      
+  
+      out_layer = Conv2D(_num_classes, (1,1), padding='same')(mid_layer)
+      out_layer = Activation('relu')(out_layer)
+      model = Model([in_img, in_init], out_layer)
       return model
 
 
@@ -343,22 +403,7 @@ elif (options.trainmodel ):
   ###
 
   ### Train model with Dice loss
-  def dice_coef(y_true, y_pred, smooth=1):
-      """
-      Dice = (2*|X & Y|)/ (|X|+ |Y|)
-           =  2*sum(|A*B|)/(sum(A^2)+sum(B^2))
-      ref: https://arxiv.org/pdf/1606.04797v1.pdf
-      @url: https://gist.github.com/wassname/7793e2058c5c9dacb5212c0ac0b18a8a
-      @author: wassname
-      """
-      intersection = K.sum(K.abs(y_true * y_pred), axis=-1)
-      npixel  =  K.cast(K.prod(K.shape(y_true)[1:]),np.float32)
-      return npixel *(2. * intersection + smooth) / (K.sum(K.square(y_true),axis=None) + K.sum(K.square(y_pred),axis=None) + smooth)
-
-  def dice_coef_loss(y_true, y_pred):
-      return -dice_coef(y_true, y_pred)
-
-  def dice_imageloss(y_true, y_pred, smooth=0):
+  def dsc(y_true, y_pred, smooth=0):
       """
       Dice = \sum_Nbatch \sum_Nonehot (2*|X & Y|)/ (|X|+ |Y|)
            = \sum_Nbatch \sum_Nonehot  2*sum(|A*B|)/(sum(A^2)+sum(B^2))
@@ -371,17 +416,22 @@ elif (options.trainmodel ):
       dicevalues= K.sum(intersection / K.expand_dims(K.expand_dims(sumunion,axis=1),axis=2), axis=(1,2))
       return -dicevalues
 
+  # dsc = 1 - dsc_as_l2
+  def dsc_as_l2(y_true, y_pred):
+      numerator = K.sum(K.square(y_true - y_pred),axis=(1,2))
+      denominator = K.sum(K.square(y_true),axis=(1,2)) + K.sum(K.square(y_pred),axis=(1,2))
+      dsc = numerator/denominator
+      return dsc
+
   def dice_metric_zero(y_true, y_pred):
-      batchdiceloss =  dice_imageloss(y_true, y_pred)
+      batchdiceloss =  dsc(y_true, y_pred)
       return -batchdiceloss[:,0]
   def dice_metric_one(y_true, y_pred):
-      batchdiceloss =  dice_imageloss(y_true, y_pred)
+      batchdiceloss =  dsc(y_true, y_pred)
       return -batchdiceloss[:,1]
   def dice_metric_two(y_true, y_pred):
-      batchdiceloss =  dice_imageloss(y_true, y_pred)
+      batchdiceloss =  dsc(y_true, y_pred)
       return -batchdiceloss[:,2]
-  def intersect_dice(y_true, y_pred):
-      return 2. *K.abs(y_true*y_pred)
 
 
 
@@ -436,15 +486,18 @@ elif (options.trainmodel ):
   ### create and run model
   ###
 
+  x_init_train = np.fromfunction(lambda z,i,j : np.maximum(20. - ( (_ny/2.0-i)**2 + (_nx/2.0-j)**2 ), 0.0), (slicesplit,_ny,_nx))
+  x_init_valid = np.fromfunction(lambda z,i,j : np.maximum(20. - ( (_ny/2.0-i)**2 + (_nx/2.0-j)**2 ), 0.0), (totnslice-slicesplit,_ny,_nx))
+
   model = get_upwind_transport_net(_nt, _final_sigma='sigmoid', _num_classes=t_max+1)
-  model.compile(loss=dice_imageloss,
-        metrics=[dice_metric_zero,dice_metric_one,dice_metric_two],
+  model.compile(loss=dsc_as_l2,
+        metrics=[dsc,dice_metric_zero,dice_metric_one,dice_metric_two],
         optimizer=options.trainingsolver)
   print("Model parameters: {0:,}".format(model.count_params()))
   print("Input shape: ", x_train[TRAINING_SLICES,:,:,np.newaxis].shape)
-  history = model.fit(x_train[TRAINING_SLICES ,:,:,np.newaxis],
+  history = model.fit([x_train[TRAINING_SLICES ,:,:,np.newaxis], x_init_train[:,:,:,np.newaxis]],
                           y_train_one_hot[TRAINING_SLICES ],
-                          validation_data=(x_train[VALIDATION_SLICES,:,:,np.newaxis],y_train_one_hot[VALIDATION_SLICES]),
+                          validation_data=([x_train[VALIDATION_SLICES,:,:,np.newaxis], x_init_valid[:,:,:,np.newaxis]], y_train_one_hot[VALIDATION_SLICES]),
                           callbacks = [tensorboard,callbacksave],
                           batch_size=options.trainingbatch,
                           epochs=options.numepochs)
@@ -456,15 +509,16 @@ elif (options.trainmodel ):
   ###
 
   import nibabel as nib
-  validationimgnii = nib.Nifti1Image(x_train[VALIDATION_SLICES,:,:] , None )
+  validationimgnii                = nib.Nifti1Image(x_train[VALIDATION_SLICES,:,:] , None )
   validationimgnii.to_filename( '%s/validationimg.nii.gz' % logfileoutputdir )
-  validationonehotnii = nib.Nifti1Image(y_train[VALIDATION_SLICES  ,:,:] , None )
+  validationonehotnii             = nib.Nifti1Image(y_train[VALIDATION_SLICES  ,:,:] , None )
   validationonehotnii.to_filename( '%s/validationseg.nii.gz' % logfileoutputdir )
-  y_predicted = model.predict(x_train[VALIDATION_SLICES,:,:,np.newaxis])
-  y_segmentation = np.argmax(y_predicted , axis=-1)
-  validationprediction = nib.Nifti1Image(y_predicted [:,:,:] , None )
-  validationprediction.to_filename( '%s/validationpredict.nii.gz' % logfileoutputdir )
-  validationoutput     = nib.Nifti1Image( y_segmentation.astype(np.uint8), None )
+  y_predicted                     = model.predict([x_train[VALIDATION_SLICES,:,:,np.newaxis], x_init_valid[:,:,:,np.newaxis]])
+  y_segmentation                  = np.argmax(y_predicted , axis=-1)
+  for jjj in range(3):
+      validationprediction            = nib.Nifti1Image(y_predicted [:,:,:,jjj] , None )
+      validationprediction.to_filename( '%s/validationpredict-%d.nii.gz' % (logfileoutputdir,jjj) )
+  validationoutput                = nib.Nifti1Image( y_segmentation[:,:,:].astype(np.uint8), None )
   validationoutput.to_filename( '%s/validationoutput.nii.gz' % logfileoutputdir )
 
 
