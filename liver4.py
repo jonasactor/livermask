@@ -91,7 +91,7 @@ def GetSetupKfolds(numfolds,idfold):
   # split in folds
   if (numfolds > 1):
      kf = KFold(n_splits=numfolds)
-     allkfolds = [ (train_index, test_index) for train_index, test_index in kf.split(dataidsfull )]
+     allkfolds   = [ (train_index, test_index) for train_index, test_index in kf.split(dataidsfull )]
      train_index = allkfolds[idfold][0]
      test_index  = allkfolds[idfold][1]
   else:
@@ -99,7 +99,7 @@ def GetSetupKfolds(numfolds,idfold):
      test_index  = None
   print(numfolds, idfold)
   print("train_index:\t", train_index)
-  print("test_index:\t", test_index)
+  print("test_index:\t",  test_index)
   return (train_index,test_index)
 
 ##########################
@@ -168,17 +168,17 @@ if (options.builddb):
         datamatrix = np.zeros(nslice  , dtype=mydatabasetype )
 
         # custom data type to subset
-        datamatrix ['dataid']          = np.repeat(row['dataid']    ,nslice  )
+        datamatrix ['dataid']                         = np.repeat(row['dataid'], nslice )
         # id the slices within the bounding box
-        axialliverbounds                              = np.repeat(False,nslice  )
-        axialtumorbounds                              = np.repeat(False,nslice  )
+        axialliverbounds                              = np.repeat(False, nslice )
+        axialtumorbounds                              = np.repeat(False, nslice )
         axialliverbounds[liverboundingbox[2]]         = True
         if (tumorboundingbox != None):
           axialtumorbounds[tumorboundingbox[2]]       = True
         datamatrix ['axialliverbounds'   ]            = axialliverbounds
         datamatrix ['axialtumorbounds'  ]             = axialtumorbounds
-        datamatrix ['imagepath']                      = np.repeat(imagelocation ,nslice  )
-        datamatrix ['truthpath']                      = np.repeat(truthlocation ,nslice  )
+        datamatrix ['imagepath']                      = np.repeat(imagelocation, nslice )
+        datamatrix ['truthpath']                      = np.repeat(truthlocation, nslice )
         datamatrix ['imagedata']                      = resimage.transpose(2,1,0)
         datamatrix ['truthdata']                      = restruth.transpose(2,1,0)
         numpydatabase = np.hstack((numpydatabase,datamatrix))
@@ -232,7 +232,7 @@ elif (options.trainmodel ):
   # load training data as views
   x_train=trainingsubset['imagedata']
   y_train=trainingsubset['truthdata']
-  slicesplit =  int(0.9 * totnslice )
+  slicesplit           =  int(0.9 * totnslice )
   TRAINING_SLICES      = slice(0,slicesplit)
   VALIDATION_SLICES    = slice(slicesplit,totnslice)
 
@@ -300,12 +300,12 @@ elif (options.trainmodel ):
          super(ForcingFunction, self).__init__(**kwargs)
 
      def build(self, input_shape):
-         self.conv_kernel_x = self.add_weight(name='conv_kernel_x',
-                          shape=(3,3,1,16),
+         self.conv_kernel_x = self.add_weight(name='conv_kernel_x_0',
+                          shape=(3,3,1,32),
                           initializer='normal',
                           trainable=True)
-         self.conv_kernel_y = self.add_weight(name='conv_kernel_y',
-                          shape=(3,3,1,16),
+         self.conv_kernel_y = self.add_weight(name='conv_kernel_y_0',
+                          shape=(3,3,1,32),
                           initializer='normal',
                           trainable=True)
          self.sep_kernel_depthwise = self.add_weight(name='sep_kernel_depth',
@@ -322,6 +322,18 @@ elif (options.trainmodel ):
                           trainable=True)
          self.conv_kernel_curve_1 = self.add_weight(name='conv_kernel_curve_1',
                           shape=(5,5,8,8),
+                          initializer='normal',
+                          trainable=True)
+         self.conv_kernel_curve_2 = self.add_weight(name='conv_kernel_curve_2',
+                          shape=(3,3,8,16),
+                          initializer='normal',
+                          trainable=True)
+         self.conv_kernel_smoother = self.add_weight(name='conv_kernel_smoother',
+                          shape=(3,3,1,1),
+                          initializer='normal',
+                          trainable=True)
+         self.kappa_kernel = self.add_weight(name='kappa_kernel',
+                          shape=input_shape[1:],
                           initializer='normal',
                           trainable=True)
          super(ForcingFunction, self).build(input_shape)
@@ -342,7 +354,6 @@ elif (options.trainmodel ):
           grad_edges_y = K.relu(grad_edges_y)
           grad_edges_y = K.sum(grad_edges_y, axis=-1, keepdims=True)
 
-
           # upwind approx to grad( edge_detection)^T grad( u )
           xp = K.conv2d(u, kXP, padding='same')
           xn = K.conv2d(u, kXN, padding='same')
@@ -360,8 +371,10 @@ elif (options.trainmodel ):
           # curvature kappa( u ) approx (learned filter)
           kappa = K.conv2d(u, self.conv_kernel_curve_0, padding='same')
           kappa = K.conv2d(kappa, self.conv_kernel_curve_1, padding='same')
+          kappa = K.conv2d(kappa, self.conv_kernel_curve_2, padding='same')
           kappa = K.sum(kappa, axis=-1, keepdims=True)
-
+          kappa = kappa*self.kappa_kernel
+          kappa = K.conv2d(kappa, self.conv_kernel_smoother, padding='same')
 #          uxx = K.conv2d(u, kXX, padding='same')
 #          uyy = K.conv2d(u, kYY, padding='same')
 #          uxy = K.conv2d(u, kXY, padding='same')
@@ -378,22 +391,21 @@ elif (options.trainmodel ):
       in_img  = Input(shape=(_ny,_nx,1))
 
       # initialization for u_0
-      in_init   = Input(shape=(_ny,_nx,1))
-      mid_layer = Activation('relu')(in_init)
-#      mid_layer = Conv2D(1, (3,3), padding='same')(in_init)
-#      mid_layer = Activation('relu')(mid_layer)
-#      mid_layer = Conv2D(1, (3,3), padding='same')(mid_layer)
-#      mid_layer = Activation('relu')(mid_layer)
+      in_layer  = Input(shape=(_ny,_nx,1))
+      mid_layer = Conv2D(1, (5,5), padding='same')(in_layer)
+#      mid_layer = LocallyConnected2D(1, (1,1))(mid_layer)
+#      mid_layer = Activation('relu')(mid_layer) 
+      mid_layer = Conv2D(1, (5,5), padding='same')(mid_layer)
+      mid_layer = Conv2D(1, (5,5), padding='same')(mid_layer)
 
       # Forcing Function F depends on image and on  u, but not on time
       F = ForcingFunction(in_img)
-
       for ttt in range(_nt):
-          mid_layer = F(mid_layer)      
+          mid_layer = F(mid_layer)
   
       out_layer = Conv2D(_num_classes, (1,1), padding='same')(mid_layer)
       out_layer = Activation('relu')(out_layer)
-      model = Model([in_img, in_init], out_layer)
+      model = Model([in_img, in_layer], out_layer)
       return model
 
 
@@ -403,7 +415,7 @@ elif (options.trainmodel ):
   ###
 
   ### Train model with Dice loss
-  def dsc(y_true, y_pred, smooth=0):
+  def dsc(y_true, y_pred, smooth=0.00001):
       """
       Dice = \sum_Nbatch \sum_Nonehot (2*|X & Y|)/ (|X|+ |Y|)
            = \sum_Nbatch \sum_Nonehot  2*sum(|A*B|)/(sum(A^2)+sum(B^2))
@@ -419,9 +431,9 @@ elif (options.trainmodel ):
   # dsc = 1 - dsc_as_l2
   def dsc_as_l2(y_true, y_pred):
       numerator = K.sum(K.square(y_true - y_pred),axis=(1,2))
-      denominator = K.sum(K.square(y_true),axis=(1,2)) + K.sum(K.square(y_pred),axis=(1,2))
-      dsc = numerator/denominator
-      return dsc
+      denominator = K.sum(K.square(y_true),axis=(1,2)) + K.sum(K.square(y_pred),axis=(1,2)) + 0.00001
+      disc = numerator/denominator
+      return disc
 
   def dice_metric_zero(y_true, y_pred):
       batchdiceloss =  dsc(y_true, y_pred)
@@ -486,12 +498,15 @@ elif (options.trainmodel ):
   ### create and run model
   ###
 
-  x_init_train = np.fromfunction(lambda z,i,j : np.maximum(20. - ( (_ny/2.0-i)**2 + (_nx/2.0-j)**2 ), 0.0), (slicesplit,_ny,_nx))
-  x_init_valid = np.fromfunction(lambda z,i,j : np.maximum(20. - ( (_ny/2.0-i)**2 + (_nx/2.0-j)**2 ), 0.0), (totnslice-slicesplit,_ny,_nx))
+  x_init_train = np.ones((slicesplit,_nx,_ny))
+  x_init_valid = np.ones((totnslice-slicesplit,_nx,_ny))
+
+#  x_init_train = np.random.uniform(size=(slicesplit,_nx,_ny))
+#  x_init_valid = np.random.uniform(size=(totnslice-slicesplit,_nx,_ny))
 
   model = get_upwind_transport_net(_nt, _final_sigma='sigmoid', _num_classes=t_max+1)
   model.compile(loss=dsc_as_l2,
-        metrics=[dsc,dice_metric_zero,dice_metric_one,dice_metric_two],
+        metrics=[dice_metric_zero,dice_metric_one,dice_metric_two],
         optimizer=options.trainingsolver)
   print("Model parameters: {0:,}".format(model.count_params()))
   print("Input shape: ", x_train[TRAINING_SLICES,:,:,np.newaxis].shape)
