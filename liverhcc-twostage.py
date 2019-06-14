@@ -11,7 +11,7 @@ import keras.backend as K
 from keras.callbacks import TensorBoard, TerminateOnNaN, ModelCheckpoint
 from keras.callbacks import Callback as CallbackBase
 from keras.preprocessing.image import ImageDataGenerator
-from optparse import OptionParser
+from optparse import OptionParser # TODO update to ArgParser (python2 --> python3)
 import nibabel as nib
 from scipy import ndimage
 from sklearn.model_selection import KFold
@@ -54,8 +54,11 @@ parser.add_option( "--dbfile",
 parser.add_option( "--trainingresample",
                   type="int", dest="trainingresample", default=256,
                   help="resample so that model prediction occurs at this resolution", metavar="int")
-parser.add_option( "--trainingbatch",
-                  type="int", dest="trainingbatch", default=4,
+parser.add_option( "--trainingbatchliver",
+                  type="int", dest="trainingbatchliver", default=4,
+                  help="batch size", metavar="int")
+parser.add_option( "--trainingbatchtumor",
+                  type="int", dest="trainingbatchtumor", default=4,
                   help="batch size", metavar="int")
 parser.add_option( "--validationbatch",
                   type="int", dest="validationbatch", default=20,
@@ -99,6 +102,12 @@ parser.add_option( "--segthreshold",
 parser.add_option( "--volumeanalysis",
                   action="store_true", dest="volumeanalysis", default=False,
                   help="track volumes and dsc score accuracy for tumors", metavar="bool")
+parser.add_option( "--predictlivermodel",
+                  action="store", dest="predictlivermodel", default=None,
+                  help="model weights (.h5) for liver seg prediction", metavar="Path")
+parser.add_option( "--predicttumormodel",
+                  action="store", dest="predicttumormodel", default=None,
+                  help="model weights (.h5) for tumor seg prediction", metavar="Path")
 (options, args) = parser.parse_args()
 
 # raw dicom data is usually short int (2bytes) datatype
@@ -313,7 +322,8 @@ def BuildDB():
   np.save( _globalnpfile, numpydatabase)
 
 def GetCallbacks(logfileoutputdir, stage):
-  filename = logfileoutputdir+"/"+stage+"modelunet.h5"
+  filename = logfileoutputdir+"/"+stage+"/modelunet.h5"
+  logname  = logfileoutputdir+"/"+stage+"/log.csv"
   if options.with_hvd:
       callbacks = [ hvd.callbacks.BroadcastGlobalVariablesCallback(0),
                     hvd.callbacks.MetricAverageCallback(),
@@ -321,12 +331,14 @@ def GetCallbacks(logfileoutputdir, stage):
                     keras.callbacks.TerminateOnNaN()         ]
       if hvd.rank() == 0:
           callbacks += [ keras.callbacks.ModelCheckpoint(filepath=filename, verbose=1, save_best_only=True),
+                         keras.callbacks.CSVLogger(logname),
                          keras.callbacks.TensorBoard(log_dir=logfileoutputdir, histogram_freq=0, write_graph=True, write_images=False)      ]
   else:
       callbacks = [ keras.callbacks.TerminateOnNaN(),
+                    keras.callbacks.CSVLogger(logname),
                     keras.callbacks.ModelCheckpoint(filepath=filename, verbose=1, save_best_only=True),  
                     keras.callbacks.TensorBoard(log_dir=logfileoutputdir, histogram_freq=0, write_graph=True, write_images=False)  ] 
-  return callbacks
+  return callbacks, filename
 
 def GetOptimizer():
   if options.with_hvd:
@@ -381,19 +393,18 @@ def volume_analysis(stack_true, stack_pred, outdir):
     plt.boxplot(dsc)
     plt.ylabel("DSC")
     plt.savefig(outdir+"/img/boxplot-dsc.png", bbox_inches="tight")
-    plt.show()
+
     plt.figure(figsize=(6,6), dpi=200)
     plt.scatter(true_vols, pred_vols)
     plt.xlabel("true volume (# pixels)")
     plt.ylabel("predicted volume (# pixels)")
     plt.savefig(outdir+"/img/scatter-truevol-predvol.png", bbox_inches="tight")
-    plt.show()
+
     plt.figure(figsize=(6,6), dpi=200)
     plt.scatter(true_vols, dsc)
     plt.xlabel("true volume (# pixels)")
     plt.ylabel("DSC")
     plt.savefig(outdir+"/img/scatter-truevol-dsc.png", bbox_inches="tight")
-    plt.show()
 
 
 
@@ -471,6 +482,8 @@ def TrainModel(kfolds=options.kfolds,idfold=0):
   logfileoutputdir= '%s/%03d/%03d' % (options.outdir, kfolds, idfold)
   os.system ('mkdir -p ' + logfileoutputdir)
   os.system ('mkdir -p ' + logfileoutputdir + '/nii')
+  os.system ('mkdir -p ' + logfileoutputdir + '/liver')
+  os.system ('mkdir -p ' + logfileoutputdir + '/tumor')
   if options.volumeanalysis:
       os.system ('mkdir -p ' + logfileoutputdir + '/img')
   print("Output to\t", logfileoutputdir)
@@ -481,20 +494,19 @@ def TrainModel(kfolds=options.kfolds,idfold=0):
   ### create and run model for Liver mask
   ###
   opt = GetOptimizer()
-  callbacks = GetCallbacks(logfileoutputdir, "liver")
+  callbacks, livermodelloc = GetCallbacks(logfileoutputdir, "liver")
   model_liver = get_unet(_depth=options.depth, _filters=options.filters, _activation=options.activation, _num_classes=1, _batch_norm=options.batchnorm)
   model_liver.compile(loss=dsc_l2,
         metrics=["binary_crossentropy"],
         optimizer=opt)
 
   print("\n\n\tlivermask training...\tModel parameters: {0:,}".format(model_liver.count_params()))
-#  model_liver.summary()
  
   history_liver = model_liver.fit( x_train[TRAINING_SLICES,:,:,np.newaxis], 
                              y_train_liver[TRAINING_SLICES,:,:,np.newaxis],
                              validation_data=(x_train[VALIDATION_SLICES,:,:,np.newaxis], y_train_liver[VALIDATION_SLICES,:,:,np.newaxis]),
                              callbacks = callbacks,
-                             batch_size=options.trainingbatch,
+                             batch_size=options.trainingbatchliver,
                              epochs=options.numepochs)
 
 
@@ -508,7 +520,7 @@ def TrainModel(kfolds=options.kfolds,idfold=0):
   ### run model for Tumor segmentation
   ###
   opt = GetOptimizer()
-  callbacks = GetCallbacks(logfileoutputdir, "tumor")
+  callbacks, tumormodelloc = GetCallbacks(logfileoutputdir, "tumor")
   model_tumor = get_unet(_depth=options.depth, _filters=options.filters, _activation=options.activation, _num_classes=1, _batch_norm=options.batchnorm)
   model_tumor.compile(loss=dsc_l2,
         metrics=["binary_crossentropy"],
@@ -519,7 +531,7 @@ def TrainModel(kfolds=options.kfolds,idfold=0):
                                  y_train_tumor[TRAINING_SLICES,:,:,np.newaxis],
                                  validation_data=(x_mask_true[VALIDATION_SLICES,:,:,np.newaxis], y_train_tumor[VALIDATION_SLICES,:,:,np.newaxis]),
                                  callbacks = callbacks,
-                                 batch_size=options.trainingbatch,
+                                 batch_size=options.trainingbatchtumor,
                                  epochs=options.numepochs)
 
   ###
@@ -553,10 +565,7 @@ def TrainModel(kfolds=options.kfolds,idfold=0):
   predtumornii.to_filename( logfileoutputdir+'/nii/predseg-tumor.nii.gz')
 
 
-
-  # TODO need to change, since 2 models are saved
-  modelloc = "%s/tumormodelunet.h5" % logfileoutputdir
-  return modelloc
+  return livermodelloc, tumormodelloc
 
 
 
@@ -594,8 +603,7 @@ def MakeStatsScript(kfolds=options.kfolds, idfold=0):
 ##########################
 # apply model to new data
 ##########################
-def PredictModel(model=options.predictmodel, image=options.predictimage, outdir=options.segmentation):
-#def PredictModel(livermodel=options.predictlivermodel, tumormodel=options.predicttumormodel, image=options.predictimage, outdir=options.segmentation):
+def PredictModel(livermodel=options.predictlivermodel, tumormodel=options.predicttumormodel, image=options.predictimage, outdir=options.segmentation):
   if (model != None and image != None and outdir != None ):
   
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
@@ -603,10 +611,10 @@ def PredictModel(model=options.predictmodel, image=options.predictimage, outdir=
     imagepredict = nib.load(image)
     imageheader  = imagepredict.header
     numpypredict = imagepredict.get_data().astype(IMG_DTYPE )
-    # error check
     assert numpypredict.shape[0:2] == (_globalexpectedpixel,_globalexpectedpixel)
     nslice = numpypredict.shape[2]
     print(nslice)
+
     resizepredict = skimage.transform.resize(numpypredict,
             (options.trainingresample,options.trainingresample,nslice ),
             order=0,
@@ -624,36 +632,48 @@ def PredictModel(model=options.predictmodel, image=options.predictimage, outdir=
           optimizer=opt)
     loaded_liver_model.load_weights(livermodel)
 
-    maskout = loaded_liver_model.predict( resizepredict[...,np.newaxis] )
-    maskimg = np.multiply( resizepredict, maskout[...,0] )
-    
+    liversegout = loaded_liver_model.predict( resizepredict[...,np.newaxis] )
+    liversegout = (liversegout[...,0] >= options.segthreshold).astype(SEG_DTYPE)
+    livermask   = np.multiply(resizepredict, liversegout).astype(IMG_DTYPE)
+
+
     loaded_tumor_model = get_unet(_depth=options.depth, _filters=options.filters, _activation=options.activation, _num_classes=1, _batch_norm=options.batchnorm)
     loaded_tumor_model.compile(loss=dsc_l2,
           metrics=["binary_crossentropy"],
           optimizer=opt)
     loaded_tumor_model.load_weights(tumormodel)
 
-    segout = loaded_tumor_model.predict( maskimg[...,np.newaxis] ) 
-    segout_resize = skimage.transform.resize(segout[...,jjj],
+    tumorsegout = loaded_tumor_model.predict( livermask[...,np.newaxis] ) 
+
+
+    liversegout_resize = skimage.transform.resize(liversegout[...,0],
             (nslice,_globalexpectedpixel,_globalexpectedpixel),
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    segout_img = nib.Nifti1Image(segout_resize, None, header=imageheader)
-    segout_img.to_filename( outdir.replace('.nii.gz', '-%d.nii.gz' % jjj) )
+    liversegout_img = nib.Nifti1Image(liversegout_resize, None, header=imageheader)
+    liversegout_img.to_filename( outdir.replace('.nii.gz', '-liverseg.nii.gz') )
+
+    tumorsegout_resize = skimage.transform.resize(tumorsegout[...,0],
+            (nslice,_globalexpectedpixel,_globalexpectedpixel),
+            order=0,
+            preserve_range=True,
+            mode='constant').transpose(2,1,0)
+    tumorsegout_img = nib.Nifti1Image(tumorsegout_resize, None, header=imageheader)
+    tumorsegout_img.to_filename( outdir.replace('.nii.gz', '-tumorseg.nii.gz') )
 
 ################################
 # Perform K-fold validation
 ################################
 def OneKfold(k=options.kfolds, i=0, datadict=None):
-    mdlloc = TrainModel(kfolds=k, idfold=i) 
+    livermodelloc, tumormodelloc = TrainModel(kfolds=k, idfold=i) 
     (train_set,test_set) = GetSetupKfolds(k,i)
     for idtest in test_set:
         baseloc = '%s/%03d/%03d' % (options.outdir, k, i)
         imgloc  = '%s/%s' % (options.rootlocation, datadict[idtest]['image'])
         outloc  = '%s/label-%04d.nii.gz' % (baseloc, idtest) 
         if options.numepochs > 0:
-            PredictModel(model=mdlloc, image=imgloc, outdir=outloc )
+            PredictModel(livermodel=livermodelloc, tumormodel=tumormodelloc, image=imgloc, outdir=outloc )
 #    MakeStatsScript(kfolds=k, idfold=i)
 
 def Kfold(kkk):
