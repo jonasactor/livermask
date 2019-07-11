@@ -6,6 +6,7 @@ import keras
 from keras.layers import Input, Conv2D, UpSampling2D, Lambda, SpatialDropout2D, Dense, Layer, Activation, BatchNormalization, MaxPool2D, concatenate, LocallyConnected2D
 from keras.models import Model, Sequential
 from keras.models import model_from_json, load_model
+from keras.utils import multi_gpu_model
 from keras.utils.np_utils import to_categorical
 import keras.backend as K
 from keras.callbacks import TensorBoard, TerminateOnNaN, ModelCheckpoint
@@ -17,7 +18,6 @@ from scipy import ndimage
 from sklearn.model_selection import KFold
 import skimage.transform
 import tensorflow as tf
-#import horovod.keras as hvd
 import sys
 import matplotlib as mptlib
 mptlib.use('TkAgg')
@@ -29,7 +29,10 @@ sys.setrecursionlimit(5000)
 parser = OptionParser()
 parser.add_option( "--hvd",
                   action="store_true", dest="with_hvd", default=False,
-                  help="use horovod for parallelism")
+                  help="use horovod for multicore parallelism")
+parser.add_option( "--gpu",
+                  type="int", dest="gpu", default=0,
+                  help="number of gpus", metavar="int")
 parser.add_option( "--builddb",
                   action="store_true", dest="builddb", default=False,
                   help="load all training data into npy", metavar="FILE")
@@ -55,10 +58,10 @@ parser.add_option( "--trainingresample",
                   type="int", dest="trainingresample", default=256,
                   help="resample so that model prediction occurs at this resolution", metavar="int")
 parser.add_option( "--trainingbatchliver",
-                  type="int", dest="trainingbatchliver", default=4,
+                  type="int", dest="trainingbatchliver", default=20,
                   help="batch size", metavar="int")
 parser.add_option( "--trainingbatchtumor",
-                  type="int", dest="trainingbatchtumor", default=4,
+                  type="int", dest="trainingbatchtumor", default=20,
                   help="batch size", metavar="int")
 parser.add_option( "--validationbatch",
                   type="int", dest="validationbatch", default=20,
@@ -72,8 +75,11 @@ parser.add_option( "--idfold",
 parser.add_option( "--rootlocation",
                   action="store", dest="rootlocation", default='/rsrch1/ip/jacctor/LiTS/LiTS',
                   help="root location for images for training", metavar="Path")
-parser.add_option("--numepochs",
-                  type="int", dest="numepochs", default=10,
+parser.add_option("--numepochs_liver",
+                  type="int", dest="numepochs_liver", default=10,
+                  help="number of epochs for training", metavar="int")
+parser.add_option("--numepochs_tumor",
+                  type="int", dest="numepochs_tumor", default=10,
                   help="number of epochs for training", metavar="int")
 parser.add_option("--outdir",
                   action="store", dest="outdir", default='./',
@@ -116,10 +122,17 @@ IMG_DTYPE = np.int16
 SEG_DTYPE = np.uint8
 
 if options.with_hvd:
+    import horovod.keras as hvd
     hvd.init()
     config = tf.ConfigProto()
     config.gpu_options.allow_growth=True
-    config.gpu_options.visible_device_list = str(hvd.local_rank())
+    if options.gpu > 1:
+        devlist = '0'
+        for i in range(1,options.gpu):
+            devlist += ','+str(i)
+        config.gpu_options.visible_device_list = devlist
+    else:
+        config.gpu_options.visible_device_list = str(hvd.local_rank())
     K.set_session(tf.Session(config=config))
 
 
@@ -195,21 +208,30 @@ def module_mid(model, depth, filters=16, kernel_size=(3,3), activation='prelu', 
         return model
     else:
         m_down = module_down( model,                filters=filters, kernel_size=kernel_size, activation=activation, batch_norm=batch_norm)
-        m_mid  = module_mid( m_down, depth=depth-1, filters=filters, kernel_size=kernel_size, activation=activation, batch_norm=batch_norm, dropout=dropout)
-        m_up   = module_up(   m_mid,                filters=filters, kernel_size=kernel_size, activation=activation, batch_norm=batch_norm, dropout=dropout)
+        m_mid  = module_mid (m_down, depth=depth-1, filters=filters, kernel_size=kernel_size, activation=activation, batch_norm=batch_norm, dropout=dropout)
+        m_up   = module_up  ( m_mid,                filters=filters, kernel_size=kernel_size, activation=activation, batch_norm=batch_norm, dropout=dropout)
         if options.skip:
             m_up = concatenate([model, m_up])
         return m_up
 
 def get_unet(_depth=2, _filters=16, _kernel_size=(3,3), _activation='prelu', _final_layer='sigmoid', _batch_norm=True, _dropout=0.5, _num_classes=1):
-    layer_in  = Input(shape=(_ny,_nx,1))
-    layer_adj = Activation('linear')(layer_in)
-    layer_adj = Conv2D(filters=_filters, kernel_size=(1,1), padding='same', activation=_activation)(layer_adj)
-    layer_mid = module_mid(layer_adj, depth=_depth, filters=_filters, kernel_size=_kernel_size, activation=_activation, batch_norm=_batch_norm, dropout=_dropout)
-    layer_out = Dense(_num_classes, activation=_final_layer, use_bias=True)(layer_mid)
-    model = Model(inputs=layer_in, outputs=layer_out)
-    return model
-
+    if options.gpu > 1:
+        with tf.device('/cpu:0'):
+            layer_in  = Input(shape=(_ny,_nx,1))
+            layer_adj = Activation('linear')(layer_in)
+#            layer_adj = Conv2D(filters=_filters, kernel_size=(1,1), padding='same', activation=_activation)(layer_adj)
+            layer_mid = module_mid(layer_adj, depth=_depth, filters=_filters, kernel_size=_kernel_size, activation=_activation, batch_norm=_batch_norm, dropout=_dropout)
+            layer_out = Dense(_num_classes, activation=_final_layer, use_bias=True)(layer_mid)
+            model = Model(inputs=layer_in, outputs=layer_out)
+            return multi_gpu_model(model, gpus=options.gpu)
+    else:
+        layer_in  = Input(shape=(_ny,_nx,1))
+        layer_adj = Activation('linear')(layer_in)
+#        layer_adj = Conv2D(filters=_filters, kernel_size=(1,1), padding='same', activation=_activation)(layer_adj)
+        layer_mid = module_mid(layer_adj, depth=_depth, filters=_filters, kernel_size=_kernel_size, activation=_activation, batch_norm=_batch_norm, dropout=_dropout)
+        layer_out = Dense(_num_classes, activation=_final_layer, use_bias=True)(layer_mid)
+        model = Model(inputs=layer_in, outputs=layer_out)
+        return model
 
 # dsc = 1 - dsc_as_l2
 def dsc_l2(y_true, y_pred, smooth=0.00001):
@@ -217,6 +239,7 @@ def dsc_l2(y_true, y_pred, smooth=0.00001):
     den = K.sum(K.square(y_true), axis=(1,2)) + K.sum(K.square(y_pred), axis=(1,2)) + smooth
     return num/den
 
+# for volume analysis
 def dsc_l2_np(y_true, y_pred, smooth=0.00001):
     num = np.sum(np.square(y_true - y_pred)) + smooth
     den = np.sum(np.square(y_true)) + np.sum(np.square(y_pred)) + smooth
@@ -322,6 +345,7 @@ def BuildDB():
   np.save( _globalnpfile, numpydatabase)
 
 def GetCallbacks(logfileoutputdir, stage):
+  logdir   = logfileoutputdir+"/"+stage
   filename = logfileoutputdir+"/"+stage+"/modelunet.h5"
   logname  = logfileoutputdir+"/"+stage+"/log.csv"
   if options.with_hvd:
@@ -332,12 +356,12 @@ def GetCallbacks(logfileoutputdir, stage):
       if hvd.rank() == 0:
           callbacks += [ keras.callbacks.ModelCheckpoint(filepath=filename, verbose=1, save_best_only=True),
                          keras.callbacks.CSVLogger(logname),
-                         keras.callbacks.TensorBoard(log_dir=logfileoutputdir, histogram_freq=0, write_graph=True, write_images=False)      ]
+                         keras.callbacks.TensorBoard(log_dir=logdir, histogram_freq=0, write_graph=True, write_images=False)      ]
   else:
       callbacks = [ keras.callbacks.TerminateOnNaN(),
                     keras.callbacks.CSVLogger(logname),
                     keras.callbacks.ModelCheckpoint(filepath=filename, verbose=1, save_best_only=True),  
-                    keras.callbacks.TensorBoard(log_dir=logfileoutputdir, histogram_freq=0, write_graph=True, write_images=False)  ] 
+                    keras.callbacks.TensorBoard(log_dir=logdir, histogram_freq=0, write_graph=True, write_images=False)  ] 
   return callbacks, filename
 
 def GetOptimizer():
@@ -507,7 +531,7 @@ def TrainModel(kfolds=options.kfolds,idfold=0):
                              validation_data=(x_train[VALIDATION_SLICES,:,:,np.newaxis], y_train_liver[VALIDATION_SLICES,:,:,np.newaxis]),
                              callbacks = callbacks,
                              batch_size=options.trainingbatchliver,
-                             epochs=options.numepochs)
+                             epochs=options.numepochs_liver)
 
 
   if options.volumeanalysis:
@@ -532,7 +556,7 @@ def TrainModel(kfolds=options.kfolds,idfold=0):
                                  validation_data=(x_mask_true[VALIDATION_SLICES,:,:,np.newaxis], y_train_tumor[VALIDATION_SLICES,:,:,np.newaxis]),
                                  callbacks = callbacks,
                                  batch_size=options.trainingbatchtumor,
-                                 epochs=options.numepochs)
+                                 epochs=options.numepochs_tumor)
 
   ###
   ### make predicions on validation set
