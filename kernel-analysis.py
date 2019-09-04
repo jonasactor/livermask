@@ -62,9 +62,6 @@ parser.add_option( "--depth",
 parser.add_option( "--filters",
                   type="int", dest="filters", default=16,
                   help="number of filters for output of CNN layer", metavar="int")
-parser.add_option( "--clusters",
-                  type="int", dest="clusters", default=5,
-                  help="number of kmeans clusters", metavar="int")
 parser.add_option( "--activation",
                   action="store", dest="activation", default='relu',
                   help="activation function", metavar="string")
@@ -74,21 +71,9 @@ parser.add_option( "--segthreshold",
 parser.add_option( "--predictlivermodel",
                   action="store", dest="predictlivermodel", default="/rsrch1/ip/jacctor/livermask/unet-2gpu-alldata-depth3/001/000/liver/modelunet.h5",
                   help="model weights (.h5) for liver seg prediction", metavar="Path")
-parser.add_option( "--normalize",
-                  action="store_true", dest="normalize", default=False,
-                  help="normalize data matrix for clustering", metavar="bool")
-parser.add_option( "--show_hist",
-                  action="store_true", dest="show_hist", default=False,
-                  help="show plotted histograms", metavar="bool")
-parser.add_option( "--show_clusters",
-                  action="store_true", dest="show_clusters", default=False,
+parser.add_option( "--show",
+                  action="store_true", dest="show", default=False,
                   help="show plotted clusters", metavar="bool")
-parser.add_option( "--test_range_clusters",
-                  action="store_true", dest="test_range_clusters", default=False,
-                  help="try kmeans with various numbers of clusters", metavar="bool")
-parser.add_option( "--tsne",
-                  action="store_true", dest="tsne", default=False,
-                  help="use TSNE for clustering", metavar="bool")
 (options, args) = parser.parse_args()
 
 # raw dicom data is usually short int (2bytes) datatype
@@ -214,6 +199,7 @@ def load_model(livermodel=options.predictlivermodel):
     loaded_liver_model.compile(loss=dsc_l2, optimizer=opt)
     loaded_liver_model.load_weights(livermodel)
 
+
     if options.gpu > 1:
         layer_dict = dict([(layer.name, layer) for layer in loaded_liver_model.layers])
         model_dict = dict([(layer.name, layer) for layer in layer_dict['model_1'].layers])
@@ -223,156 +209,52 @@ def load_model(livermodel=options.predictlivermodel):
 
 
 
-def load_kernels(mdict=None, loc=options.outdir, nclusters=options.clusters):
+def load_kernels(mdict=None, loc=options.outdir):
 
         if type(mdict) == type(None):
            raise Exception("no dicts passed")
         
-        datalist = []
-        datalabels = []
-        kernelarraylist = []
+        kernellist = []
+        kernellabels = []
+        kernelinshapes = []
         loclist = []
 
         for l2 in mdict:
             if l2[0:6] == 'conv2d':
-     
-                outloc = loc +  l2  +'-'
-                kernellist = []
-                kernel = mdict[l2].get_weights()[0]
-                bias   = mdict[l2].get_weights()[1]
 
-                for o in range(kernel.shape[-1]):
-                    for i in range(kernel.shape[-2]):
+                outloc  = loc + '/' + l2  +'-'
+                kernel  = mdict[l2].get_weights()[0]
+                bias    = mdict[l2].get_weights()[1]
+                inshape = mdict[l2].input_shape
+    
+                assert inshape[-1] == kernel.shape[2]
 
-                        datalabels.append((l2[7:],i,o))
-                        
-                        if options.normalize:
-                            datalist.append(kernel[:,:,i,o].flatten()*np.sign(kernel[1,1,i,o]))
-                            kernellist.append(kernel[:,:,i,o].flatten()*np.sign(kernel[1,1,i,o]))
-                        else:
-                            datalist.append(kernel[:,:,i,o].flatten())
-                            kernellist.append(kernel[:,:,i,o].flatten())
-
-                if options.normalize:
-                     kernellist = np.array(kernellist)
-                     rownorm = np.linalg.norm(kernellist, axis=1)
-                     rowzero = rownorm <  1.e-6
-                     rownzro = rownorm >= 1.e-6
-                     if np.sum(rowzero) > 0:
-                         print("\tThere are",np.sum(rowzero),"zeroes.")
-                         kernellist[rowzero,:] = np.zeros((rowzero.shape[0],9))
-                     kernellist[rownzro] /= rownorm[:, np.newaxis]
-
-                kernellist = np.array(kernellist)
-                kernelarraylist.append(kernellist)
+                kernellist.append(kernel) 
+                kernellabels.append(l2)
+                kernelinshapes.append(inshape[1:-1])
                 loclist.append(outloc)
-                print("Layer", l2, "has kernels for a matrix size", kernellist.shape)
-        datamatrix = np.array(datalist)
-        print(datamatrix.shape)
-        return datamatrix, kernelarraylist, loclist
+                print("Layer", l2, "has a kernel of size", kernel.shape, "with input of shape", inshape)
+
+        return kernellist, kernellabels, kernelinshapes, loclist
+
+# input_shape : feature map to be convolved
+def singular_values(kernel, input_shape):
+    transforms = np.fft.fft2(kernel, input_shape, axes=[0,1])
+    return np.linalg.svd(transforms)
 
 
-
-def cluster_and_plot(datamatrix, loc=options.outdir, nclusters=options.clusters):
-        kernelnorms = np.linalg.norm(datamatrix, axis=1)
-        plt.hist(kernelnorms)
-        plt.savefig(loc+"hist-"+str(nclusters)+".png", bbox_inches="tight")
-        if options.show_hist:
-            plt.show()
-        else:
-            plt.clf()
-            plt.close()
-
-
-        kmeans  = KMeans(n_clusters=nclusters, random_state=0)
-        pred    = kmeans.fit_predict(datamatrix)
-        clscore = cluster_score(datamatrix, pred)
-        print("\tFit:\t", kmeans.score(datamatrix) / datamatrix.shape[0], end=' ')
-        print("\tCluster score:\t", clscore)
-#        datamatrix += datamean
-
-
-        if options.tsne:
-            tsne = TSNE(init='pca')
-            tsne_results = tsne.fit_transform(datamatrix)
-            x0 = tsne_results[:,0]
-            x1 = tsne_results[:,1]
-
-            plt.scatter(x0,x1,s=9,c=pred)
-
-            plt.savefig(loc+"cluster-TSNE-"+str(nclusters)+".png", bbox_inches="tight")
-            if options.show_clusters:
-                plt.show()
-            else:
-                plt.clf()
-                plt.close()
-
-        else:
-
-            datamean = np.mean(datamatrix, axis=0)
-            datamatrix -= datamean
-            
-            U, S, Vt = np.linalg.svd(datamatrix)
-
-            print("V0:")
-            print(Vt[0,:].reshape((3,3)))
-            print("V1:")
-            print(Vt[1,:].reshape((3,3)))
-            proj = np.dot(datamatrix, Vt[0:2, :].T)   
-            
-            correction = np.dot(datamean, Vt[0:2, :].T)
-
-            x0 = proj[:,0] + correction[0]
-            x1 = proj[:,1] + correction[1]
-            plt.scatter(x0,x1, s=9, c=pred)
-
-            known, klabel = get_known_kernels()
-            known = np.array(known)
-            
-            known -= datamean
-
-            known = np.dot(known, Vt[0:2, :].T)
-            k0 = known[:,0] + correction[0]
-            k1 = known[:,1] + correction[1]
-            plt.scatter(k0, k1, s=36, c='red', marker="s")
-            for i, txt in enumerate(klabel):
-                plt.annotate(txt, (k0[i], k1[i])) 
-
-            plt.savefig(loc+"cluster-"+str(nclusters)+".png", bbox_inches="tight")
-            if options.show_clusters:
-                plt.show()
-            else:
-                plt.clf()
-                plt.close()
-
-        return clscore
-
-
-def check_scores_many_clusters(mdict=None, loc=options.outdir, nclustlist=[options.clusters]):
-    score_array = []
-    for nc in nclustlist:
-
-        print("\n Clustering with", nc, "clusters...")
-
-        data, klist, loclist = load_kernels(mdict=mdict, loc=loc, nclusters=nc)
-        clscores = []
-        nlayers = len(klist)
-        for kidx, k in enumerate(klist):
-            cs = cluster_and_plot(k, loc=loclist[kidx], nclusters=nc) 
-            clscores.append(cs)
-        score_array.append(clscores)
-
-
-    for lidx in range(nlayers):
-        sc = []
-        for cidx, nc in enumerate(nclustlist):
-            sc.append(score_array[cidx][lidx])
-        plt.plot(nclustlist, sc)
-        plt.title("Scores for layer "+str(lidx))
-        plt.xlabel("number of clusters")
-        plt.ylabel("score")
-        plt.savefig(loc+"scores-layer"+str(lidx)+".png", bbox_inches="tight")
+def plot_singular_values(kernel, inshape, loc=options.outdir):
+    U, D, Vt = singular_values(kernel, inshape)
+    n_el = np.prod(D.shape)
+    Dflat = D.flatten()
+    Dflat[::-1].sort()
+    plt.plot(list(range(n_el)), Dflat)
+    plt.savefig(loc+"spectrum.png", bbox_inches="tight")
+    if options.show:
         plt.show()
+    else:
+        plt.clf()
+        plt.close()
 
 
 def get_known_kernels():
@@ -427,19 +309,11 @@ def get_known_kernels():
 
 
 loc = options.outdir
-if options.normalize:
-    loc += '/normalized/'
-else:
-    loc += '/original/' 
 os.system('mkdir -p ' + loc)
 
 mdict = load_model(livermodel=options.predictlivermodel)
-if not options.test_range_clusters:
-    data, klist, loclist = load_kernels(mdict = mdict, loc=loc, nclusters=options.clusters)
-    for kidx, k in enumerate(klist):
-        cluster_and_plot(k, loc=loclist[kidx], nclusters=options.clusters)
-    cluster_and_plot(data, loc=loc, nclusters=options.clusters)
-else:
-    nlist = list(range(2,16))
-    check_scores_many_clusters(mdict=mdict, loc=loc, nclustlist=nlist)
+klist, klabels, kinshapes, loclist = load_kernels(mdict = mdict, loc=loc)
+for kidx, k in enumerate(klist):
+    plot_singular_values(k, kinshapes[kidx], loc=loclist[kidx])
+#    cluster_and_plot(k, loc=loclist[kidx])
 
