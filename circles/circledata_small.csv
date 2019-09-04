@@ -1,0 +1,6 @@
+dataid,image,label
+0,circle-vol-0.nii.gz,circle-seg-0.nii.gz
+1,circle-vol-1.nii.gz,circle-seg-1.nii.gz
+2,circle-vol-2.nii.gz,circle-seg-2.nii.gz
+3,circle-vol-3.nii.gz,circle-seg-3.nii.gz
+4,circle-vol-4.nii.gz,circle-seg-4.nii.gz
