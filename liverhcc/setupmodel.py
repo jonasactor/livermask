@@ -70,7 +70,7 @@ def GetSetupKfolds(floc, numfolds, idfold):
 ### preprocess database and store to disk
 ###
 
-def BuildDB():
+def BuildDB(op):
   # create  custom data frame database type
   mydatabasetype = [('dataid', int),
      ('axialliverbounds',bool),
@@ -94,6 +94,16 @@ def BuildDB():
 
       # load nifti file
       imagedata = nib.load(imagelocation )
+
+      # reorient to RAS+
+      orig_affine = imagedata.affine
+      orig_header = imagedata.header
+      print('image: ', nib.orientations.aff2axcodes(orig_affine), end='')
+      imagedata = nib.as_closest_canonical(imagedata)
+      img_affine = imagedata.affine
+      print(' to ', nib.orientations.aff2axcodes(img_affine))
+
+
       numpyimage= imagedata.get_data().astype(settings.IMG_DTYPE )
       # error check
       assert numpyimage.shape[0:2] == (settings._globalexpectedpixel,settings._globalexpectedpixel)
@@ -104,8 +114,32 @@ def BuildDB():
             mode='constant',
             preserve_range=True).astype(settings.IMG_DTYPE)
 
+
       # load nifti file
       truthdata = nib.load(truthlocation )
+
+      # reorient to RAS+
+      print('seg:   ', nib.orientations.aff2axcodes(truthdata.affine), end='')
+      truthdata   = nib.as_closest_canonical(truthdata)
+      true_affine = truthdata.affine
+      if not np.allclose(true_affine, img_affine):
+#          print('\t\t WARNING DIFFERING ORIENTATIONS. PLEASE CHECK IMAGE HEADERS')
+#          print(orig_affine)
+#          print(img_affine)
+#          print(true_affine)
+#          print('\t\t PROCEEDING USING THE IMAGE HEADER, NOT SEGMENTATION HEADER')
+          truthdata = nib.load(truthlocation)
+          newdata   = truthdata.get_data()
+          newheader = orig_header.copy()
+          truthdata = nib.nifti1.Nifti1Image(newdata, orig_affine, header=newheader)
+          truthdata = nib.as_closest_canonical(truthdata)
+          true_affine = truthdata.affine
+#          print(orig_affine)
+#          print(img_affine)
+#          print(true_affine)
+      print(' to ', nib.orientations.aff2axcodes(true_affine))
+
+
       numpytruth= truthdata.get_data().astype(settings.SEG_DTYPE)
       # error check
       assert numpytruth.shape[0:2] == (settings._globalexpectedpixel,settings._globalexpectedpixel)
@@ -115,6 +149,8 @@ def BuildDB():
               order=0,
               mode='constant',
               preserve_range=True).astype(settings.SEG_DTYPE)
+
+
 
       # bounding box for each label
       if( np.max(restruth) ==1 ) :
