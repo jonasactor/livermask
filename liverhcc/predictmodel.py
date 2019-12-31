@@ -45,6 +45,7 @@ def PredictModel():
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
     
     imagepredict = nib.load(image)
+    origheader   = imagepredict.header
     imageaffine0 = imagepredict.affine
     imagepredict = nib.as_closest_canonical(imagepredict)
     imageaffine1 = imagepredict.affine
@@ -77,7 +78,7 @@ def PredictModel():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    segin_windowed_img = nib.Nifti1Image(segin_windowed, None, header=imageheader)
+    segin_windowed_img = nib.Nifti1Image(segin_windowed, None, header=origheader)
     segin_windowed_img.to_filename( outdir.replace('.nii.gz', '-in-windowed.nii.gz') )
 
     segout_float_resize = skimage.transform.resize(segout_float[...,0],
@@ -85,7 +86,7 @@ def PredictModel():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    segout_float_img = nib.Nifti1Image(segout_float_resize, None, header=imageheader)
+    segout_float_img = nib.Nifti1Image(segout_float_resize, None, header=origheader)
     segout_float_img.to_filename( outdir.replace('.nii.gz', '-predtumorfloat.nii.gz') )
 
     segout_int_resize = skimage.transform.resize(segout_int[...,0],
@@ -93,7 +94,7 @@ def PredictModel():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    segout_int_img = nib.Nifti1Image(segout_int_resize, None, header=imageheader)
+    segout_int_img = nib.Nifti1Image(segout_int_resize, None, header=origheader)
     segout_int_img.to_filename( outdir.replace('.nii.gz', '-predtumorseg.nii.gz') )
 
     return segout_int_resize
@@ -106,6 +107,7 @@ def PredictModel():
 ###
 ### image argument needs
 ### to be np array 
+### input is alreday rescaled
 ###
 ##########################
 def PredictModelFromNumpy(model=None, image=None, imageheader=None, outdir=None):
@@ -337,6 +339,7 @@ def PredictDropout():
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
     
     imagepredict = nib.load(image)
+    origheader   = imagepredict.header
     imageaffine0 = imagepredict.affine
     imagepredict = nib.as_closest_canonical(imagepredict)
     imageaffine1 = imagepredict.affine
@@ -347,7 +350,7 @@ def PredictDropout():
     nslice = numpypredict.shape[2]
 
     # save unprocesed image_in
-    img_in_nii = nib.Nifti1Image(numpypredict, None, header=imageheader)
+    img_in_nii = nib.Nifti1Image(numpypredict, None, header=origheader)
     img_in_nii.to_filename( outdir.replace('.nii', '-imgin.nii.gz') )
 
     # preprocessing
@@ -366,7 +369,7 @@ def PredictDropout():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    segin_windowed_img = nib.Nifti1Image(segin_windowed, None, header=imageheader)
+    segin_windowed_img = nib.Nifti1Image(segin_windowed, None, header=origheader)
     segin_windowed_img.to_filename( outdir.replace('.nii', '-imgin-windowed.nii.gz') )
 
 
@@ -374,12 +377,6 @@ def PredictDropout():
     ###
     ### set up model
     ###
-
-#    opt          = GetOptimizer()
-#    lss, met     = GetLoss()
-#    loaded_model = get_unet()
-#    loaded_model.compile(loss=lss, metrics=met, optimizer=opt)
-#    loaded_model.load_weights(model)
 
     loaded_model = load_model(model, custom_objects={'dsc_l2':dsc_l2, 'l1':l1, 'dsc':dsc, 'dsc_int':dsc})
 
@@ -398,8 +395,8 @@ def PredictDropout():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    segout_float_img = nib.Nifti1Image(segout_float_resize, None, header=imageheader)
-    segout_float_img.to_filename( outdir.replace('.nii', '-predtumorfloat.nii.gz') )
+    segout_float_img = nib.Nifti1Image(segout_float_resize, None, header=origheader)
+    segout_float_img.to_filename( outdir.replace('.nii', '-pred-float.nii.gz') )
 
     # save pred_int
     segout_int_resize = skimage.transform.resize(segout_int[...,0],
@@ -407,8 +404,8 @@ def PredictDropout():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    segout_int_img = nib.Nifti1Image(segout_int_resize, None, header=imageheader)
-    segout_int_img.to_filename( outdir.replace('.nii', '-predtumorseg.nii.gz') )
+    segout_int_img = nib.Nifti1Image(segout_int_resize, None, header=origheader)
+    segout_int_img.to_filename( outdir.replace('.nii', '-pred-seg.nii.gz') )
 
 
 
@@ -445,7 +442,7 @@ def PredictDropout():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    pred_avg_img = nib.Nifti1Image(pred_avg_resize, None, header=imageheader)
+    pred_avg_img = nib.Nifti1Image(pred_avg_resize, None, header=origheader)
     pred_avg_img.to_filename( outdir.replace('.nii', '-pred-avg.nii.gz') )
 
     # save pred_var
@@ -454,7 +451,7 @@ def PredictDropout():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    pred_var_img = nib.Nifti1Image(pred_var_resize, None, header=imageheader)
+    pred_var_img = nib.Nifti1Image(pred_var_resize, None, header=origheader)
     pred_var_img.to_filename( outdir.replace('.nii', '-pred-var.nii.gz') )
     
     # save pred_ent
@@ -463,7 +460,7 @@ def PredictDropout():
             order=0,
             preserve_range=True,
             mode='constant').transpose(2,1,0)
-    pred_ent_img = nib.Nifti1Image(pred_ent_resize, None, header=imageheader)
+    pred_ent_img = nib.Nifti1Image(pred_ent_resize, None, header=origheader)
     pred_ent_img.to_filename( outdir.replace('.nii', '-pred-ent.nii.gz') )
 
 

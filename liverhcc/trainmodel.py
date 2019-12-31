@@ -123,8 +123,8 @@ def TrainModel(idfold=0):
           brightness_range=[0.95,1.05],
           width_shift_range=[-0.1,0.1],
           height_shift_range=[-0.1,0.1],
-          horizontal_flip=True,
-          vertical_flip=True,
+#          horizontal_flip=True,
+#          vertical_flip=True,
           zoom_range=0.1,
           fill_mode='nearest',
           )
@@ -153,7 +153,7 @@ def TrainModel(idfold=0):
   ### make predicions on validation set
   ###
   print("\n\n\tapplying models...")
-  y_pred_float = (settings.options.hu_ub - settings.options.hu_lb)*model.predict( x_train_typed[VALIDATION_SLICES,:,:,np.newaxis] )
+  y_pred_float = model.predict( x_train_typed[VALIDATION_SLICES,:,:,np.newaxis] )
   y_pred_seg   = (y_pred_float[...,0] >= settings.options.segthreshold).astype(settings.SEG_DTYPE)
 
   print("\tsaving to file...")
