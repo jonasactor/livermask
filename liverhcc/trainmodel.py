@@ -25,7 +25,7 @@ mptlib.use('TkAgg')
 import matplotlib.pyplot as plt
 
 import settings 
-
+import preprocess
 
 ###
 ### Training: build NN model from anonymized data
@@ -90,7 +90,8 @@ def TrainModel(idfold=0):
   y_train_liver = np.zeros_like(y_train_typed)
   y_train_liver[liver_idx] = 1
 
-
+  x_train_typed = preprocess.window(x_train_typed, settings.options.hu_lb, settings.options.hu_ub)
+  x_train_typed = preprocess.rescale(x_train_typed, settings.options.hu_lb, settings.options.hu_ub)
 
   ###
   ### set up output, logging, and callbacks
@@ -152,18 +153,20 @@ def TrainModel(idfold=0):
   ### make predicions on validation set
   ###
   print("\n\n\tapplying models...")
-  y_pred_float = model.predict( x_train_typed[VALIDATION_SLICES,:,:,np.newaxis] )
+  y_pred_float = (settings.options.hu_ub - settings.options.hu_lb)*model.predict( x_train_typed[VALIDATION_SLICES,:,:,np.newaxis] )
   y_pred_seg   = (y_pred_float[...,0] >= settings.options.segthreshold).astype(settings.SEG_DTYPE)
 
   print("\tsaving to file...")
   trueinnii     = nib.Nifti1Image(x_train      [VALIDATION_SLICES,:,:] , None )
   truesegnii    = nib.Nifti1Image(y_train      [VALIDATION_SLICES,:,:] , None )
+  windownii     = nib.Nifti1Image(x_train_typed[VALIDATION_SLICES,:,:] , None )
   truelivernii  = nib.Nifti1Image(y_train_liver[VALIDATION_SLICES,:,:] , None )
   predsegnii    = nib.Nifti1Image(y_pred_seg, None )
   predfloatnii  = nib.Nifti1Image(y_pred_float, None)
  
   trueinnii.to_filename(    logfileoutputdir+'/nii/trueimg.nii.gz')
-  truesegnii.to_filename(   logfileoutputdir+'/nii/truseg.nii.gz')
+  truesegnii.to_filename(   logfileoutputdir+'/nii/trueseg.nii.gz')
+  windownii.to_filename(    logfileoutputdir+'/nii/windowedimg.nii.gz')
   truelivernii.to_filename( logfileoutputdir+'/nii/trueliver.nii.gz')
   predsegnii.to_filename(   logfileoutputdir+'/nii/predtumorseg.nii.gz')
   predfloatnii.to_filename( logfileoutputdir+'/nii/predtumorfloat.nii.gz')

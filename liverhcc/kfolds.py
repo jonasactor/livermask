@@ -27,8 +27,8 @@ import matplotlib.pyplot as plt
 import settings
 from setupmodel import GetSetupKfolds, GetDataDictionary
 from trainmodel import TrainModel
-from predictmodel import PredictModelFromNumpy
-from mymetrics import dsc_int_3D
+from predictmodel import PredictModelFromNumpy, PredictDropoutFromNumpy
+from mymetrics import dsc_int_3D, dsc_l2_3D
 
 ################################
 # Perform K-fold validation
@@ -39,16 +39,15 @@ def OneKfold(i=0, datadict=None):
 
     modelloc = TrainModel(idfold=i) 
     (train_set,test_set) = GetSetupKfolds(settings.options.dbfile, k, i)
-    print('train set',train_set)
-    print('test set',test_set)
 
+    sumscore = 0
+    sumscorefloat = 0
     for idtest in test_set:
         baseloc = '%s/%03d/%03d' % (settings.options.outdir, k, i)
         imgloc  = '%s/%s' % (settings.options.rootlocation, datadict[idtest]['image'])
         segloc  = '%s/%s' % (settings.options.rootlocation, datadict[idtest]['label'])
         outloc  = '%s/label-%04d.nii.gz' % (baseloc, idtest)
-        sumscore = 0
-        if settings.options.numepochs > 0 and settings.options.makepredictions: # doing K-fold prediction as I train
+        if settings.options.numepochs > 0 and (settings.options.makepredictions or settings.options.makedropoutmap):
 
             imagepredict = nib.load(imgloc)
             imageheader  = imagepredict.header
@@ -61,18 +60,17 @@ def OneKfold(i=0, datadict=None):
             seg_liver = np.zeros_like(allseg)
             seg_liver[liver_idx] = 1
 
-            seg_tumor = np.zeros_like(allseg)
-            seg_tumor[tumor_idx] = 1
+            image_liver = numpypredict.astype(settings.IMG_DTYPE)
 
-            image_liver = seg_liver*numpypredict - 100.0*(1.0 - seg_liver)
-            image_liver = image_liver.astype(settings.IMG_DTYPE)
+            if settings.options.makepredictions:
+                predseg, predfloat = PredictModelFromNumpy(model=modelloc, image=image_liver, imageheader=imageheader, outdir=outloc )
+            else:
+                predseg, predfloat = PredictDropoutFromNumpy(model=modelloc, image=image_liver, imageheader=imageheader, outdir=outloc)
 
-            predseg = PredictModelFromNumpy(model=modelloc, image=image_liver, imageheader=imageheader, outdir=outloc )
-            score = dsc_int_3D(seg_tumor, predseg)
-            sumscore += score
-            print(idtest, "\t", score)
- 
-    print(k, " avg dice:\t", sumscore/len(test_set))
+            score_float = dsc_l2_3D(seg_liver.astype(settings.IMG_DTYPE), predfloat)
+            sumscorefloat += score_float
+            print(idtest, "\t", score_float)
+    print(k, " avg dice:\t", sumscorefloat/len(test_set)) 
 
 def Kfold():
     databaseinfo = GetDataDictionary(settings.options.dbfile)

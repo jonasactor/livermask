@@ -241,14 +241,11 @@ def GetOptimizer():
 
 def GetLoss():
 
-  from mymetrics import dsc, dsc_l2, dsc_int, dsc_int_3D, l1, dsc_l1reg
+  from mymetrics import dsc, dsc_l2, dsc_int, dsc_int_3D, l1
 
-  if settings.options.regularize:
-      lss = dsc_l1reg
-      met = [dsc_l2, l1, dsc, dsc_int]
-  else:
-      lss = dsc_l2
-      met = [l1, dsc, dsc_int]
+  lss = dsc_l2
+  met = [dsc_l2, l1, dsc, dsc_int]
+
   return lss, met
 
 

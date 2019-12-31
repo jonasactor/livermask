@@ -97,16 +97,30 @@ def process_options():
     parser.add_option( "--v",
                   type="int", dest="v", default=1,
                   help="number of v-cycles to complete", metavar="int")
-    parser.add_option( "--regularize",
-                  action="store_true", dest="regularize", default=False,
-                  help="add l1 regularization to DSC", metavar="bool")
+    parser.add_option( "--regularizer",
+                  type="float", dest="regularizer", default=0.0,
+                  help="Lagrange multiplier on kernel regularization term in loss function", metavar="float")
     parser.add_option( "--makepredictions",
                   action="store_true", dest="makepredictions", default=False,
                   help="make predictions during k-fold training", metavar="bool")
     parser.add_option( "--rescon",
                   action="store_true", dest="rescon", default=False,
                   help="residual connection on blocks", metavar="bool")
-
+    parser.add_option( "--rescon2",
+                  action="store_true", dest="rescon2", default=False,
+                  help="residual connections on blocks, with extra conv2d", metavar="bool")
+    parser.add_option( "--hu_lb",
+                  type="int", dest="hu_lb", default=-100,
+                  help="lower bound for CT windowing", metavar="int")
+    parser.add_option( "--hu_ub",
+                  type="int", dest="hu_ub", default=300,
+                  help="upper bound for CT windowing", metavar="int")
+    parser.add_option( "--makedropoutmap",
+                  action="store_true", dest="makedropoutmap", default=False,
+                  help="perform multiple evaluations of predictions using different dropout draws", metavar="bool")
+    parser.add_option( "--ntrials",
+                  type="int", dest="ntrials", default=20,
+                  help="number of Bernoulli trials for dropout draws", metavar="int")
     global options
     global args
 
@@ -144,6 +158,7 @@ def perform_setup(options):
     global _globalexpectedpixel
     global IMG_DTYPE
     global SEG_DTYPE
+    global FLOAT_DTYPE
     global _nx
     global _ny
 
@@ -152,6 +167,7 @@ def perform_setup(options):
     # labels are usually uchar (1byte)
     IMG_DTYPE = np.int16
     SEG_DTYPE = np.uint8
+    FLOAT_DTYPE = np.float32
 
     _globalnpfile = options.dbfile.replace('.csv','%d.npy' % options.trainingresample )
     _globalexpectedpixel=512

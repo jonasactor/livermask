@@ -33,7 +33,7 @@ print('database file: %s ' % settings._globalnpfile )
 
 from setupmodel import GetDataDictionary, BuildDB
 from trainmodel import TrainModel
-from predictmodel import PredictModel
+from predictmodel import PredictModel, PredictDropout
 from kfolds import OneKfold, Kfold
 
 
@@ -49,6 +49,9 @@ if options.kfolds > 1:
 if options.trainmodel and options.kfolds==1 : # no kfolds, i.e. k=1
     TrainModel()
 if options.predictmodel:
-    PredictModel()
+    if options.makedropoutmap:
+        PredictDropout()
+    else:
+        PredictModel()
 if ( (not options.builddb) and (not options.trainmodel) and (not options.predictmodel) and (options.kfolds == 1)):
     print("parser error")
