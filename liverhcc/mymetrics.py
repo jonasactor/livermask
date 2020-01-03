@@ -37,7 +37,7 @@ def dsc_int_3D(y_true, y_pred, smooth=0.00001):
 def dsc_l2_3D(y_true, y_pred, smooth=0.00001):
     num = np.sum(np.square(y_true - y_pred)) 
     den = np.sum(np.square(y_true)) + np.sum(np.square(y_pred)) + smooth
-    return 1.0 - num/den
+    return num/den
 
 def l1(y_true, y_pred, smooth=0.00001):
     return K.sum(K.abs(y_true-y_pred), axis=(1,2))/(256*256)

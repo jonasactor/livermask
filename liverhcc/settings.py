@@ -113,7 +113,7 @@ def process_options():
                   type="int", dest="hu_lb", default=-100,
                   help="lower bound for CT windowing", metavar="int")
     parser.add_option( "--hu_ub",
-                  type="int", dest="hu_ub", default=300,
+                  type="int", dest="hu_ub", default=400,
                   help="upper bound for CT windowing", metavar="int")
     parser.add_option( "--makedropoutmap",
                   action="store_true", dest="makedropoutmap", default=False,
@@ -121,6 +121,9 @@ def process_options():
     parser.add_option( "--ntrials",
                   type="int", dest="ntrials", default=20,
                   help="number of Bernoulli trials for dropout draws", metavar="int")
+    parser.add_option( "--lr",
+                  type="float", dest="lr", default=0.001,
+                  help="learning rate for Adam optimizer. Not used if not using Adam.", metavar="float")
     global options
     global args
 

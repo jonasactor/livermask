@@ -4,16 +4,12 @@ import sys
 import os
 import json
 import keras
-from keras.layers import Input, Conv2D, UpSampling2D, Lambda, SpatialDropout2D, Dense, Layer, Activation, BatchNormalization, MaxPool2D, concatenate, LocallyConnected2D
-from keras.models import Model, Sequential
 from keras.models import model_from_json, load_model
-from keras.utils import multi_gpu_model
 from keras.utils.np_utils import to_categorical
 import keras.backend as K
 from keras.callbacks import TensorBoard, TerminateOnNaN, ModelCheckpoint
 from keras.callbacks import Callback as CallbackBase
 from keras.preprocessing.image import ImageDataGenerator
-from keras.initializers import Constant
 from optparse import OptionParser # TODO update to ArgParser (python2 --> python3)
 import nibabel as nib
 from scipy import ndimage
@@ -70,7 +66,7 @@ def GetSetupKfolds(floc, numfolds, idfold):
 ### preprocess database and store to disk
 ###
 
-def BuildDB(op):
+def BuildDB():
   # create  custom data frame database type
   mydatabasetype = [('dataid', int),
      ('axialliverbounds',bool),
@@ -92,64 +88,17 @@ def BuildDB(op):
       truthlocation = '%s/%s' % (settings.options.rootlocation,row['label'])
       print(imagelocation,truthlocation )
 
-      # load nifti file
-      imagedata = nib.load(imagelocation )
-
-      # reorient to RAS+
-      orig_affine = imagedata.affine
-      orig_header = imagedata.header
-      print('image: ', nib.orientations.aff2axcodes(orig_affine), end='')
-      imagedata = nib.as_closest_canonical(imagedata)
-      img_affine = imagedata.affine
-      print(' to ', nib.orientations.aff2axcodes(img_affine))
+      numpyimage, orig_header, numpytruth  = preprocess.reorient(imagelocation, segloc=truthlocation)
 
 
-      numpyimage= imagedata.get_data().astype(settings.IMG_DTYPE )
       # error check
       assert numpyimage.shape[0:2] == (settings._globalexpectedpixel,settings._globalexpectedpixel)
       nslice = numpyimage.shape[2]
-      resimage=skimage.transform.resize(numpyimage,
-            (settings.options.trainingresample,settings.options.trainingresample,nslice),
-            order=0,
-            mode='constant',
-            preserve_range=True).astype(settings.IMG_DTYPE)
-
-
-      # load nifti file
-      truthdata = nib.load(truthlocation )
-
-      # reorient to RAS+
-      print('seg:   ', nib.orientations.aff2axcodes(truthdata.affine), end='')
-      truthdata   = nib.as_closest_canonical(truthdata)
-      true_affine = truthdata.affine
-      if not np.allclose(true_affine, img_affine):
-#          print('\t\t WARNING DIFFERING ORIENTATIONS. PLEASE CHECK IMAGE HEADERS')
-#          print(orig_affine)
-#          print(img_affine)
-#          print(true_affine)
-#          print('\t\t PROCEEDING USING THE IMAGE HEADER, NOT SEGMENTATION HEADER')
-          truthdata = nib.load(truthlocation)
-          newdata   = truthdata.get_data()
-          newheader = orig_header.copy()
-          truthdata = nib.nifti1.Nifti1Image(newdata, orig_affine, header=newheader)
-          truthdata = nib.as_closest_canonical(truthdata)
-          true_affine = truthdata.affine
-#          print(orig_affine)
-#          print(img_affine)
-#          print(true_affine)
-      print(' to ', nib.orientations.aff2axcodes(true_affine))
-
-
-      numpytruth= truthdata.get_data().astype(settings.SEG_DTYPE)
-      # error check
       assert numpytruth.shape[0:2] == (settings._globalexpectedpixel,settings._globalexpectedpixel)
       assert nslice  == numpytruth.shape[2]
-      restruth=skimage.transform.resize(numpytruth,
-              (settings.options.trainingresample,settings.options.trainingresample,nslice),
-              order=0,
-              mode='constant',
-              preserve_range=True).astype(settings.SEG_DTYPE)
 
+      resimage = preprocess.resize_to_nn(numpyimage, transpose=False).astype(settings.IMG_DTYPE)
+      restruth = preprocess.resize_to_nn(numpytruth, transpose=False).astype(settings.SEG_DTYPE)
 
 
       # bounding box for each label
@@ -216,7 +165,7 @@ def GetCallbacks(logfileoutputdir, stage):
 def GetOptimizer():
   if settings.options.with_hvd:
       if settings.options.trainingsolver=="adam":
-          opt = keras.optimizers.Adam(lr=0.001*hvd.size())
+          opt = keras.optimizers.Adam(lr=settings.options.lr*hvd.size())
       elif settings.options.trainingsolver=="adadelta":
           opt = keras.optimizers.Adadelta(1.0*hvd.size())
       elif settings.options.trainingsolver=="nadam":
@@ -228,7 +177,7 @@ def GetOptimizer():
       opt = hvd.DistributedOptimizer(opt)
   else:
       if settings.options.trainingsolver=="adam":
-          opt = keras.optimizers.Adam(lr=0.001)
+          opt = keras.optimizers.Adam(lr=settings.options.lr)
       elif settings.options.trainingsolver=="adadelta":
           opt = keras.optimizers.Adadelta(1.0)
       elif settings.options.trainingsolver=="nadam":

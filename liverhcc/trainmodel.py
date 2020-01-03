@@ -83,13 +83,10 @@ def TrainModel(idfold=0):
   ###
   ### data preprocessing : applying liver mask
   ###
-  x_train_typed = x_train
   y_train_typed = y_train.astype(settings.SEG_DTYPE)
+  y_train_liver = preprocess.livermask(y_train_typed)
 
-  liver_idx = y_train_typed > 0
-  y_train_liver = np.zeros_like(y_train_typed)
-  y_train_liver[liver_idx] = 1
-
+  x_train_typed = x_train
   x_train_typed = preprocess.window(x_train_typed, settings.options.hu_lb, settings.options.hu_ub)
   x_train_typed = preprocess.rescale(x_train_typed, settings.options.hu_lb, settings.options.hu_ub)
 
@@ -120,14 +117,14 @@ def TrainModel(idfold=0):
 
   if settings.options.augment:
       train_datagen = ImageDataGenerator(
-          brightness_range=[0.95,1.05],
-          width_shift_range=[-0.1,0.1],
-          height_shift_range=[-0.1,0.1],
+#          brightness_range=[0.95,1.0],
+#          width_shift_range=[-0.1,0.1],
+#          height_shift_range=[-0.1,0.1],
 #          horizontal_flip=True,
 #          vertical_flip=True,
-          zoom_range=0.1,
-          fill_mode='nearest',
-          )
+#          zoom_range=0.1,
+#          fill_mode='nearest',
+     )
   else:
       train_datagen=ImageDataGenerator()
 

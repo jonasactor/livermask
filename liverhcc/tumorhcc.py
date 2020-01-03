@@ -39,7 +39,7 @@ from kfolds import OneKfold, Kfold
 
 
 if options.builddb:
-    BuildDB(options)
+    BuildDB()
 if options.kfolds > 1:
     if options.idfold > -1:
         databaseinfo = GetDataDictionary(options.dbfile)

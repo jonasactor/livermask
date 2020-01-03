@@ -3,17 +3,6 @@ import csv
 import sys
 import os
 import json
-import keras
-from keras.layers import Input, Conv2D, UpSampling2D, Lambda, SpatialDropout2D, Dense, Layer, Activation, BatchNormalization, MaxPool2D, concatenate, LocallyConnected2D
-from keras.models import Model, Sequential
-from keras.models import model_from_json, load_model
-from keras.utils import multi_gpu_model
-from keras.utils.np_utils import to_categorical
-import keras.backend as K
-from keras.callbacks import TensorBoard, TerminateOnNaN, ModelCheckpoint
-from keras.callbacks import Callback as CallbackBase
-from keras.preprocessing.image import ImageDataGenerator
-from keras.initializers import Constant
 import nibabel as nib
 from scipy import ndimage
 from sklearn.model_selection import KFold
@@ -25,9 +14,10 @@ import matplotlib.pyplot as plt
 
 
 import settings
+import preprocess
 from setupmodel import GetSetupKfolds, GetDataDictionary
 from trainmodel import TrainModel
-from predictmodel import PredictModelFromNumpy, PredictDropoutFromNumpy
+from predictmodel import PredictModel, PredictDropout
 from mymetrics import dsc_int_3D, dsc_l2_3D
 
 ################################
@@ -49,27 +39,19 @@ def OneKfold(i=0, datadict=None):
         outloc  = '%s/label-%04d.nii.gz' % (baseloc, idtest)
         if settings.options.numepochs > 0 and (settings.options.makepredictions or settings.options.makedropoutmap):
 
-            imagepredict = nib.load(imgloc)
-            imageheader  = imagepredict.header
-            numpypredict = imagepredict.get_data().astype(settings.IMG_DTYPE)
-            allseg       = nib.load(segloc).get_data().astype(settings.SEG_DTYPE)
-
-            liver_idx = allseg > 0
-            tumor_idx = allseg > 1
-
-            seg_liver = np.zeros_like(allseg)
-            seg_liver[liver_idx] = 1
-
-            image_liver = numpypredict.astype(settings.IMG_DTYPE)
 
             if settings.options.makepredictions:
-                predseg, predfloat = PredictModelFromNumpy(model=modelloc, image=image_liver, imageheader=imageheader, outdir=outloc )
+                predseg, predfloat = PredictModel(  model=modelloc, image=imgloc, outdir=outloc) 
             else:
-                predseg, predfloat = PredictDropoutFromNumpy(model=modelloc, image=image_liver, imageheader=imageheader, outdir=outloc)
+                predseg, predfloat = PredictDropout(model=modelloc, image=imgloc, outdir=outloc)
 
-            score_float = dsc_l2_3D(seg_liver.astype(settings.IMG_DTYPE), predfloat)
+            seg = nib.load(segloc).get_data().astype(settings.SEG_DTYPE)
+            seg_liver = preprocess.livermask(seg)
+
+            score_float = dsc_l2_3D(seg_liver, predfloat)
             sumscorefloat += score_float
             print(idtest, "\t", score_float)
+
     print(k, " avg dice:\t", sumscorefloat/len(test_set)) 
 
 def Kfold():
