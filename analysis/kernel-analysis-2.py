@@ -89,6 +89,7 @@ class LayerNode():
         if isinstance(layer, keras.layers.DepthwiseConv2D):
             k = layer.get_weights()[0]
             self.myconst = np.array([np.sum(np.abs(k[:,:,j,0])) for j in range(k.shape[2])])
+#            self.myconst = np.array([1.0 for j in range(k.shape[2])])
 
         if isinstance(layer, keras.layers.AveragePooling2D):
             self.myconst = 0.5
@@ -161,10 +162,6 @@ def load_kernels(mdict=None, loc=options.outdir, use_bias=options.use_bias):
                 kernelinshapes.append(inshape[1:-1])
                 loclist.append(outloc)
                 print("Layer", l2, "has a kernel of size", kernel.shape, "with input of shape", inshape)
-#                for j in range(kernel.shape[2]):
-#                    for jj in range(kernel.shape[3]):
-#                        print(kernel[:,:,j,jj],'\n')
-#                print('Bias ', bias)
                 print('\n')
  
             elif l2[0:16] == 'depthwise_conv2d':
@@ -188,19 +185,18 @@ def load_kernels(mdict=None, loc=options.outdir, use_bias=options.use_bias):
                     loclist.append(otl)
 
                 print("Layer", l2, "has a kernel of size", kernel.shape, "with input of shape", inshape)
-#                for j in range(kernel.shape[2]):
-#                    for jj in range(kernel.shape[3]):
-#                        print(kernel[:,:,j,jj],'\n')
-#                print('Bias ', bias)
                 print('\n')
         return kernellist, kernellabels, kernelinshapes, loclist, kernelbiasedlist
 
+
+
+# as according to Segdhi et al
 # input_shape : feature map to be convolved
 def singular_values(kernel, input_shape):
     transforms = np.fft.fft2(kernel, input_shape, axes=[0,1])
     return np.linalg.svd(transforms)
 
-
+# as according to Segdhi et al
 def plot_singular_values(kernel, inshape, loc=options.outdir, b=False):
     U, D, Vt = singular_values(kernel, inshape)
     n_el = np.prod(D.shape)
