@@ -34,11 +34,13 @@ def dsc_int_3D(y_true, y_pred, smooth=0.00001):
     den = np.sum(np.abs(y_true_int)) + np.sum(np.abs(y_pred_int)) + smooth
     return num/den
 
+def dsc_l2_3D(y_true, y_pred, smooth=0.00001):
+    num = np.sum(np.square(y_true - y_pred)) 
+    den = np.sum(np.square(y_true)) + np.sum(np.square(y_pred)) + smooth
+    return num/den
 
 def l1(y_true, y_pred, smooth=0.00001):
     return K.sum(K.abs(y_true-y_pred), axis=(1,2))/(256*256)
 
-def dsc_l1reg(y_true, y_pred, smooth=0.00001):
-    return dsc_l2(y_true, y_pred, smooth) + l1(y_true, y_pred, smooth)  
 
 

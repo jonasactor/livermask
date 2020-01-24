@@ -27,12 +27,12 @@ import matplotlib.pyplot as plt
 def perform_setup(options):
     
     sys.setrecursionlimit(5000)
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth=True
 
     if options.with_hvd:
         import horovod.keras as hvd
         hvd.init()
-        config = tf.ConfigProto()
-        config.gpu_options.allow_growth=True
         if options.gpu > 1:
             devlist = '0'
             for i in range(1,options.gpu):

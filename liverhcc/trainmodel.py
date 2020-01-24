@@ -118,12 +118,12 @@ def TrainModel(idfold=0):
   if settings.options.augment:
       train_datagen = ImageDataGenerator(
 #          brightness_range=[0.95,1.0],
-#          width_shift_range=[-0.1,0.1],
-#          height_shift_range=[-0.1,0.1],
+          width_shift_range=[-0.1,0.1],
+          height_shift_range=[-0.1,0.1],
 #          horizontal_flip=True,
 #          vertical_flip=True,
 #          zoom_range=0.1,
-#          fill_mode='nearest',
+          fill_mode='nearest',
      )
   else:
       train_datagen=ImageDataGenerator()

@@ -57,8 +57,11 @@ def predict_viz_model(vizmodel, imgin, m_names, mdict, loc):
         plt.grid(False)
         plt.imshow(display_grid, aspect='auto', cmap='gray')
         plt.savefig(loc+"img-"+layer_name+".png", bbox_inches="tight")
-        plt.clf()
-        plt.close()
+        if n_cols == 1:
+            plt.show()
+        else:
+            plt.clf()
+            plt.close()
 
         lyr = mdict[layer_name]
         if isinstance(lyr, keras.layers.Conv2D) or isinstance(lyr, keras.layers.Dense):

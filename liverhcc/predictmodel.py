@@ -84,11 +84,11 @@ def PredictDropout(model=settings.options.predictmodel, image=settings.options.p
     resizepredict = preprocess.window(resizepredict, settings.options.hu_lb, settings.options.hu_ub)
     resizepredict = preprocess.rescale(resizepredict, settings.options.hu_lb, settings.options.hu_ub)
 
-    opt          = GetOptimizer()
-    lss, met     = GetLoss()
-    loaded_model = get_unet()
-    loaded_model.compile(loss=lss, metrics=met, optimizer=opt)
-    loaded_model.load_weights(model)
+#    opt          = GetOptimizer()
+#    lss, met     = GetLoss()
+#    loaded_model = get_unet()
+#    loaded_model.compile(loss=lss, metrics=met, optimizer=opt)
+#    loaded_model.load_weights(model)
 
     # save unprocesed image_in
     img_in_nii = nib.Nifti1Image(numpypredict, None, header=origheader)
