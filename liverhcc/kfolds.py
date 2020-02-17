@@ -28,7 +28,7 @@ def OneKfold(i=0, datadict=None):
     k = settings.options.kfolds
 
     modelloc = TrainModel(idfold=i) 
-    (train_set,test_set) = GetSetupKfolds(settings.options.dbfile, k, i)
+    (train_set,test_set,valid_set) = GetSetupKfolds(settings.options.dbfile, k, i)
 
     sumscore = 0
     sumscorefloat = 0
@@ -43,16 +43,16 @@ def OneKfold(i=0, datadict=None):
             if settings.options.makepredictions:
                 predseg, predfloat = PredictModel(  model=modelloc, image=imgloc, outdir=outloc) 
             else:
-                predseg, predfloat = PredictDropout(model=modelloc, image=imgloc, outdir=outloc)
+                predseg, predfloat = PredictDropout(model=modelloc, image=imgloc, outdir=outloc, seg=segloc)
 
-            seg = nib.load(segloc).get_data().astype(settings.SEG_DTYPE)
-            seg_liver = preprocess.livermask(seg)
-
-            score_float = dsc_l2_3D(seg_liver, predfloat)
-            sumscorefloat += score_float
-            print(idtest, "\t", score_float)
-
-    print(k, " avg dice:\t", sumscorefloat/len(test_set)) 
+#            seg = nib.load(segloc).get_data().astype(settings.SEG_DTYPE)
+#            seg_liver = preprocess.livermask(seg)
+#
+#            score_float = dsc_l2_3D(seg_liver, predfloat)
+#            sumscorefloat += score_float
+#            print(idtest, "\t", score_float)
+#
+#    print(k, " avg dice:\t", sumscorefloat/len(test_set)) 
 
 def Kfold():
     databaseinfo = GetDataDictionary(settings.options.dbfile)

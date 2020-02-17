@@ -36,48 +36,79 @@ def TrainModel(idfold=0):
   from buildmodel import get_unet
 
   ###
+  ### set up output, logging, and callbacks
+  ###
+  kfolds = settings.options.kfolds
+
+  logfileoutputdir= '%s/%03d/%03d' % (settings.options.outdir, kfolds, idfold)
+  os.system ('mkdir -p ' + logfileoutputdir)
+  os.system ('mkdir -p ' + logfileoutputdir + '/nii')
+  os.system ('mkdir -p ' + logfileoutputdir + '/liver')
+  print("Output to\t", logfileoutputdir)
+
+  ###
   ### load data
   ###
 
-  kfolds = settings.options.kfolds
 
   print('loading memory map db for large dataset')
   numpydatabase = np.load(settings._globalnpfile)
-  (train_index,test_index) = GetSetupKfolds(settings.options.dbfile, kfolds, idfold)
+  (train_index,test_index,valid_index) = GetSetupKfolds(settings.options.dbfile, kfolds, idfold)
 
   print('copy data subsets into memory...')
   axialbounds = numpydatabase['axialliverbounds']
   dataidarray = numpydatabase['dataid']
-  dbtrainindex= np.isin(dataidarray, train_index )
-  dbtestindex = np.isin(dataidarray, test_index  )
+  dbtrainindex = np.isin(dataidarray, train_index )
+  dbtestindex  = np.isin(dataidarray, test_index  )
+  dbvalidindex = np.isin(dataidarray, valid_index ) 
   subsetidx_train  = np.all( np.vstack((axialbounds , dbtrainindex)) , axis=0 )
   subsetidx_test   = np.all( np.vstack((axialbounds , dbtestindex )) , axis=0 )
-  if np.sum(subsetidx_train) + np.sum(subsetidx_test) != min(np.sum(axialbounds ),np.sum(dbtrainindex )) :
+  subsetidx_valid  = np.all( np.vstack((axialbounds , dbvalidindex)) , axis=0 )
+  if np.sum(subsetidx_train) + np.sum(subsetidx_test) + np.sum(subsetidx_valid) != min(np.sum(axialbounds ),np.sum(dbtrainindex )) :
       raise("data error: slice numbers dont match")
 
   print('copy memory map from disk to RAM...')
   trainingsubset = numpydatabase[subsetidx_train]
+  validsubset    = numpydatabase[subsetidx_valid]
+  testsubset     = numpydatabase[subsetidx_test ]
+
+#  trimg = trainingsubset['imagedata']
+#  trseg = trainingsubset['truthdata']
+#  vaimg = validsubset['imagedata']
+#  vaseg = validsubset['truthdata']
+#  teimg = testsubset['imagedata']
+#  teseg = testsubset['truthdata']
+
+#  trimg_img = nib.Nifti1Image(trimg, None)
+#  trimg_img.to_filename( logfileoutputdir+'/nii/train-img.nii.gz')
+#  vaimg_img = nib.Nifti1Image(vaimg, None)
+#  vaimg_img.to_filename( logfileoutputdir+'/nii/valid-img.nii.gz')
+#  teimg_img = nib.Nifti1Image(teimg, None)
+#  teimg_img.to_filename( logfileoutputdir+'/nii/test-img.nii.gz')
+#
+#  trseg_img = nib.Nifti1Image(trseg, None)
+#  trseg_img.to_filename( logfileoutputdir+'/nii/train-seg.nii.gz')
+#  vaseg_img = nib.Nifti1Image(vaseg, None)
+#  vaseg_img.to_filename( logfileoutputdir+'/nii/valid-seg.nii.gz')
+#  teseg_img = nib.Nifti1Image(teseg, None)
+#  teseg_img.to_filename( logfileoutputdir+'/nii/test-seg.nii.gz')
 
   np.random.seed(seed=0)
   np.random.shuffle(trainingsubset)
-  totnslice = len(trainingsubset)
+
+  ntrainslices = len(trainingsubset)
+  nvalidslices = len(validsubset)
 
   x_train=trainingsubset['imagedata']
   y_train=trainingsubset['truthdata']
 
-  slicesplit        = int(0.9 * totnslice)
-  TRAINING_SLICES   = slice(         0, slicesplit)
-  VALIDATION_SLICES = slice(slicesplit, totnslice )
+  x_valid=validsubset['imagedata']
+  y_valid=validsubset['truthdata']
 
   print("\nkfolds : ", kfolds)
   print("idfold : ",   idfold)
-  print("slices in kfold   : ", totnslice)
-  print("slices training   : ", slicesplit)
-  print("slices validation : ", totnslice - slicesplit)
-  try:
-      print("slices testing    : ", len(numpydatabase[subsetidx_test]))
-  except:
-      print("slices testing    : 0")
+  print("slices training   : ", ntrainslices)
+  print("slices validation : ", nvalidslices)
 
 
   ###
@@ -90,14 +121,12 @@ def TrainModel(idfold=0):
   x_train_typed = preprocess.window(x_train_typed, settings.options.hu_lb, settings.options.hu_ub)
   x_train_typed = preprocess.rescale(x_train_typed, settings.options.hu_lb, settings.options.hu_ub)
 
-  ###
-  ### set up output, logging, and callbacks
-  ###
-  logfileoutputdir= '%s/%03d/%03d' % (settings.options.outdir, kfolds, idfold)
-  os.system ('mkdir -p ' + logfileoutputdir)
-  os.system ('mkdir -p ' + logfileoutputdir + '/nii')
-  os.system ('mkdir -p ' + logfileoutputdir + '/liver')
-  print("Output to\t", logfileoutputdir)
+  y_valid_typed = y_valid.astype(settings.SEG_DTYPE)
+  y_valid_liver = preprocess.livermask(y_valid_typed)
+
+  x_valid_typed = x_valid
+  x_valid_typed = preprocess.window(x_valid_typed, settings.options.hu_lb, settings.options.hu_ub)
+  x_valid_typed = preprocess.rescale(x_valid_typed, settings.options.hu_lb, settings.options.hu_ub)
 
 
 
@@ -117,32 +146,74 @@ def TrainModel(idfold=0):
 
   if settings.options.augment:
       train_datagen = ImageDataGenerator(
-#          brightness_range=[0.95,1.0],
-          width_shift_range=[-0.1,0.1],
-          height_shift_range=[-0.1,0.1],
-#          horizontal_flip=True,
-#          vertical_flip=True,
-#          zoom_range=0.1,
-          fill_mode='nearest',
-     )
+          brightness_range=[0.9,1.1],
+          preprocessing_function=preprocess.post_augment,
+      )
+      train_maskgen = ImageDataGenerator(
+              )
   else:
       train_datagen=ImageDataGenerator()
+      train_maskgen=ImageDataGenerator()
 
-  test_datagen = ImageDataGenerator()
+  sd = 2 # arbitrary but fixed seed for ImageDataGenerators()
+  dataflow = train_datagen.flow(x_train_typed[...,np.newaxis],
+          batch_size=settings.options.trainingbatch,
+          seed=sd,
+          shuffle=True)
+  maskflow = train_maskgen.flow(y_train_liver[...,np.newaxis],
+          batch_size=settings.options.trainingbatch,
+          seed=sd,
+          shuffle=True)
+  train_generator = zip(dataflow, maskflow)
 
-  train_generator = train_datagen.flow(x_train_typed[TRAINING_SLICES,:,:,np.newaxis],
-                        y_train_liver[TRAINING_SLICES,:,:,np.newaxis],
-                        batch_size=settings.options.trainingbatch)
-  test_generator = test_datagen.flow(x_train_typed[VALIDATION_SLICES,:,:,np.newaxis],
-                        y_train_liver[VALIDATION_SLICES,:,:,np.newaxis],
-                        batch_size=settings.options.validationbatch)
+#  train_generator = train_datagen.flow(x_train_typed[...,np.newaxis],
+#          y=y_train_liver[...,np.newaxis],
+#          batch_size=settings.options.trainingbatch,
+#          seed=sd,
+#          shuffle=True)
+
+  valid_datagen = ImageDataGenerator()
+  valid_maskgen = ImageDataGenerator()
+
+  validdataflow = valid_datagen.flow(x_valid_typed[...,np.newaxis],
+          batch_size=settings.options.validationbatch,
+          seed=sd,
+          shuffle=True)
+  validmaskflow = valid_maskgen.flow(y_valid_liver[...,np.newaxis],
+          batch_size=settings.options.validationbatch,
+          seed=sd,
+          shuffle=True)
+  valid_generator = zip(validdataflow,validmaskflow)
+
+###
+### visualize augmentation
+###
+#
+#  import matplotlib
+#  matplotlib.use('TkAgg')
+#  from matplotlib import pyplot as plt
+#  for i in range(8):
+#      plt.subplot(4,4,2*i + 1)
+#      imbatch = dataflow.next()
+#      sgbatch = maskflow.next()
+#      imaug = imbatch[0][:,:,0]
+#      sgaug = sgbatch[0][:,:,0]
+#      plt.imshow(imaug)
+#      plt.subplot(4,4,2*i + 2)
+#      plt.imshow(sgaug)
+#  plt.show()
+#  return
+#
+
   history_liver = model.fit_generator(
                         train_generator,
-                        steps_per_epoch= slicesplit / settings.options.trainingbatch,
+                        steps_per_epoch = ntrainslices / settings.options.trainingbatch,
                         epochs=settings.options.numepochs,
-                        validation_data=test_generator,
+                        validation_data=valid_generator,
                         callbacks=callbacks,
-                        shuffle=True)
+                        shuffle=True,
+                        validation_steps= nvalidslices / settings.options.validationbatch,
+                        )
 
 
 
@@ -150,20 +221,20 @@ def TrainModel(idfold=0):
   ### make predicions on validation set
   ###
   print("\n\n\tapplying models...")
-  y_pred_float = model.predict( x_train_typed[VALIDATION_SLICES,:,:,np.newaxis] )
+  y_pred_float = model.predict( x_valid_typed[...,np.newaxis] )
   y_pred_seg   = (y_pred_float[...,0] >= settings.options.segthreshold).astype(settings.SEG_DTYPE)
 
   print("\tsaving to file...")
-  trueinnii     = nib.Nifti1Image(x_train      [VALIDATION_SLICES,:,:] , None )
-  truesegnii    = nib.Nifti1Image(y_train      [VALIDATION_SLICES,:,:] , None )
-  windownii     = nib.Nifti1Image(x_train_typed[VALIDATION_SLICES,:,:] , None )
-  truelivernii  = nib.Nifti1Image(y_train_liver[VALIDATION_SLICES,:,:] , None )
+  trueinnii     = nib.Nifti1Image(x_valid,       None)
+  truesegnii    = nib.Nifti1Image(y_valid,       None)
+#  windownii     = nib.Nifti1Image(x_valid_typed, None)
+  truelivernii  = nib.Nifti1Image(y_valid_liver, None)
   predsegnii    = nib.Nifti1Image(y_pred_seg, None )
   predfloatnii  = nib.Nifti1Image(y_pred_float, None)
  
   trueinnii.to_filename(    logfileoutputdir+'/nii/trueimg.nii.gz')
   truesegnii.to_filename(   logfileoutputdir+'/nii/trueseg.nii.gz')
-  windownii.to_filename(    logfileoutputdir+'/nii/windowedimg.nii.gz')
+#  windownii.to_filename(    logfileoutputdir+'/nii/windowedimg.nii.gz')
   truelivernii.to_filename( logfileoutputdir+'/nii/trueliver.nii.gz')
   predsegnii.to_filename(   logfileoutputdir+'/nii/predtumorseg.nii.gz')
   predfloatnii.to_filename( logfileoutputdir+'/nii/predtumorfloat.nii.gz')

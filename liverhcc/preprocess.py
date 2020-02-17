@@ -3,6 +3,7 @@ import nibabel as nib
 import settings
 from scipy import ndimage
 import skimage.transform
+from skimage.measure import label
 
 # cut off img intensities
 # img : npy array
@@ -92,3 +93,14 @@ def resize_to_original(img,transpose=True):
     if transpose:
         real = real.transpose(2,1,0)
     return real
+
+# returns largest connected component of {0,1} binary segmentation image
+# in : img \in {0,1}^n_pixels
+def largest_connected_component(img):
+    labels = label(img)
+    assert ( labels.max() != 0)
+    largestCC = labels == np.argmax(np.bincount(labels.flat)[1:])+1
+    return largestCC
+
+def post_augment(img):
+    return rescale(img, 0, 255)

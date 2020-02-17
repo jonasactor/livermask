@@ -17,8 +17,10 @@ import matplotlib.pyplot as plt
 
 ### if model is a liver model, from liverhcc code
 ### otherwise this needs to be changed to tumorhcc
-sys.path.append('liverhcc')
+sys.path.append('/rsrch1/ip/jacctor/livermask/liverhcc')
 from mymetrics import dsc_l2, dsc, dsc_int, l1
+from ista import ISTA
+
 
 sys.setrecursionlimit(5000)
 
@@ -33,9 +35,9 @@ parser.add_option( "--outdir",
 parser.add_option( "--show",
                   action="store_true", dest="show", default=False,
                   help="show plotted clusters", metavar="bool")
-parser.add_option( "--use_bias",
-                  action="store_true", dest="use_bias", default=False,
-                  help="incorporate bias into linear operator", metavar="bool")
+parser.add_option( "--gpu",
+                  type="int", dest="gpu", default=1,
+                  help="number of gpus used to train model", metavar="int")
 (options, args) = parser.parse_args()
 
 
@@ -55,15 +57,17 @@ _ny = 256
 def load_modeldict(livermodel=options.model):
 
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
-    loaded_liver_model=load_model(livermodel, custom_objects={'dsc_l2':dsc_l2, 'l1':l1, 'dsc':dsc, 'dsc_int':dsc})
-
-    layer_dict = dict([(layer.name, layer) for layer in loaded_liver_model.layers])
-    model_dict = dict([(layer.name, layer) for layer in layer_dict['model_1'].layers])
-
+    loaded_liver_model=load_model(livermodel, custom_objects={'dsc_l2':dsc_l2, 'l1':l1, 'dsc':dsc, 'dsc_int':dsc, 'ISTA':ISTA})
     print(loaded_liver_model.summary())
-    print(layer_dict['model_1'].summary())
+    layer_dict = dict([(layer.name, layer) for layer in loaded_liver_model.layers])
 
-    return model_dict
+    if options.gpu > 1:
+        assert 'model_1' in layer_dict
+        model_dict = dict([(layer.name, layer) for layer in layer_dict['model_1'].layers])
+        print(layer_dict['model_1'].summary())
+        return model_dict
+
+    return layer_dict
 
 
 def build_graph(model_dict):
@@ -71,9 +75,6 @@ def build_graph(model_dict):
         layer = model_dict[lname]
         print(lname, end='\t')
         print('\t', 'layers in:\t', [n.get_config()['inbound_layers'] for n in layer._inbound_nodes])
-#        print('\t', [n.get_config()['outbound_layer'] for n in layer._inbound_nodes])
-#        print('\t', [n.get_config()['inbound_layers'] for n in layer._outbound_nodes])
-#        print('\t', [n.get_config()['outbound_layer'] for n in layer._outbound_nodes])
 
 
 class LayerNode():
@@ -81,26 +82,49 @@ class LayerNode():
         self.name = lname
         self.layer = layer
         self.layers_in = [n.get_config()['inbound_layers'] for n in layer._inbound_nodes][0]
-        self.myconst = 1.0
+        self.myconst   = 1.0
         self.prevconst = 1.0
-        self.netconst = 1.0
+        self.netconst  = 1.0
+        self.mybound   = 1.0
+        self.prevbound = 1.0
+        self.netbound  = 1.0
         self.prev_computed = False
 
         if isinstance(layer, keras.layers.DepthwiseConv2D):
             k = layer.get_weights()[0]
-            self.myconst = np.array([np.sum(np.abs(k[:,:,j,0])) for j in range(k.shape[2])])
+#            self.mybound = np.sum(np.abs(k))
+#            self.myconst = np.sum(np.abs(k))
+            k_each = np.amax(np.sum(np.abs(k), axis=(0,1,3)))
+            self.mybound = k_each
+            self.myconst = k_each
+#            self.mybound = np.array([np.sum(np.abs(k[:,:,j,0])) for j in range(k.shape[2])])
+#            self.myconst = np.array([np.sum(np.abs(k[:,:,j,0])) for j in range(k.shape[2])])
 #            self.myconst = np.array([1.0 for j in range(k.shape[2])])
 
         if isinstance(layer, keras.layers.AveragePooling2D):
             self.myconst = 0.5
+            self.mybound = 0.5
+
+        if isinstance(layer, keras.layers.MaxPool2D):
+            self.myconst = 1.0
+            self.mybound = 1.0
 
         if isinstance(layer, keras.layers.Conv2D) and not isinstance(layer, keras.layers.DepthwiseConv2D):
             k = layer.get_weights()[0]
+            k_cin  = np.amax(np.sum(np.abs(k), axis=(0,1,3)))
+            k_cout = np.amax(np.sum(np.abs(k), axis=(0,1,2)))
+            self.mybound = min(np.sqrt( k_cin * k_cout ), np.sum(np.square(k)))
+            self.myconst = min(np.sqrt( k_cin * k_cout ), np.sum(np.square(k)))
+#            self.mybound = np.sum(np.abs(k))
+#            self.myconst = np.sum(np.abs(k))
+#            self.mybound = np.array([np.sum(np.abs(k[:,:,:,j])) for j in range(k.shape[3])])
 #            self.myconst = np.array([np.sum(np.abs(k[:,:,:,j])) for j in range(k.shape[3])])
-            self.myconst = np.array([1.0 for j in range(k.shape[3])])
+#            self.myconst = np.array([1.0 for j in range(k.shape[3])])
 
         if isinstance(layer, keras.layers.Dense):
-            self.myconst = np.linalg.norm(layer.get_weights()[0][:,0])
+            w = layer.get_weights()[0][:,0]
+            self.mybound = np.linalg.norm(w)
+            self.myconst = np.linalg.norm(w)
 
         if isinstance(self.layer, keras.layers.InputLayer):
             self.prev_computed = True
@@ -115,6 +139,7 @@ class LayerNode():
         if not self.prev_computed:  
             self.prev_computed = True
             if len(self.layers_in) == 1:
+#                self.prevbound = [nodedict[l].get_lip_const(nodedict) for l in self.layers_in][0]
                 self.prevconst = [nodedict[l].get_lip_const(nodedict) for l in self.layers_in][0]
             elif len(self.layers_in) == 2:
                 self.prevconst = np.add( *[nodedict[l].get_lip_const(nodedict) for l in self.layers_in])
@@ -132,7 +157,7 @@ def get_node_dict(mdict):
     return ndict
 
 
-def load_kernels(mdict=None, loc=options.outdir, use_bias=options.use_bias):
+def load_kernels(mdict=None, loc=options.outdir):
 
         if type(mdict) == type(None):
            raise Exception("no dicts passed")

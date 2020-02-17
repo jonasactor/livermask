@@ -38,10 +38,10 @@ def process_options():
                   type="int", dest="trainingresample", default=256,
                   help="resample so that model prediction occurs at this resolution", metavar="int")
     parser.add_option( "--trainingbatch",
-                  type="int", dest="trainingbatch", default=20,
+                  type="int", dest="trainingbatch", default=16,
                   help="batch size", metavar="int")
     parser.add_option( "--validationbatch",
-                  type="int", dest="validationbatch", default=20,
+                  type="int", dest="validationbatch", default=16,
                   help="batch size", metavar="int")
     parser.add_option( "--kfolds",
                   type="int", dest="kfolds", default=1,
@@ -53,7 +53,7 @@ def process_options():
                   action="store", dest="rootlocation", default='/rsrch1/ip/jacctor/LiTS/LiTS',
                   help="root location for images for training", metavar="Path")
     parser.add_option("--numepochs",
-                  type="int", dest="numepochs", default=10,
+                  type="int", dest="numepochs", default=30,
                   help="number of epochs for training", metavar="int")
     parser.add_option("--outdir",
                   action="store", dest="outdir", default='./',
@@ -74,7 +74,7 @@ def process_options():
                   action="store_true", dest="reverse_up", default=False,
                   help="perform conv2D then upsample on way back up UNet", metavar="bool")
     parser.add_option( "--depth",
-                  type="int", dest="depth", default=3,
+                  type="int", dest="depth", default=5,
                   help="number of down steps to UNet", metavar="int")
     parser.add_option( "--filters",
                   type="int", dest="filters", default=16,
@@ -86,29 +86,29 @@ def process_options():
                   type="float", dest="segthreshold", default=0.5,
                   help="cutoff for binary segmentation from real-valued output", metavar="float")
     parser.add_option( "--dropout",
-                  type="float", dest="dropout", default=0.5,
+                  type="float", dest="dropout", default=0.25,
                   help="percent  dropout", metavar="float")
     parser.add_option( "--nu",
                   type="int", dest="nu", default=2,
                   help="number of smoothing steps (conv blocks) at each down/up", metavar="int")
     parser.add_option( "--nu_bottom",
-                  type="int", dest="nu_bottom", default=4,
+                  type="int", dest="nu_bottom", default=2,
                   help="number of conv blocks on bottom of UNet", metavar="int")
     parser.add_option( "--v",
                   type="int", dest="v", default=1,
                   help="number of v-cycles to complete", metavar="int")
-    parser.add_option( "--regularizer",
-                  type="float", dest="regularizer", default=0.0,
-                  help="Lagrange multiplier on kernel regularization term in loss function", metavar="float")
+    parser.add_option( "--l1reg",
+                  type="float", dest="l1reg", default=0.0,
+                  help="regularize with entrywise-l1 norm on kernels", metavar="float")
+    parser.add_option( "--l2reg",
+                  type="float", dest="l2reg", default=0.0,
+                  help="regularize with entrywise-l2 norm on kernels", metavar="float")
     parser.add_option( "--makepredictions",
                   action="store_true", dest="makepredictions", default=False,
                   help="make predictions during k-fold training", metavar="bool")
     parser.add_option( "--rescon",
                   action="store_true", dest="rescon", default=False,
                   help="residual connection on blocks", metavar="bool")
-    parser.add_option( "--rescon2",
-                  action="store_true", dest="rescon2", default=False,
-                  help="residual connections on blocks, with extra conv2d", metavar="bool")
     parser.add_option( "--hu_lb",
                   type="int", dest="hu_lb", default=-100,
                   help="lower bound for CT windowing", metavar="int")
@@ -124,6 +124,9 @@ def process_options():
     parser.add_option( "--lr",
                   type="float", dest="lr", default=0.001,
                   help="learning rate for Adam optimizer. Not used if not using Adam.", metavar="float")
+    parser.add_option( "--ista",
+                  type="float", dest="ista", default=0.0,
+                  help="use sparse thresholding to enforce kernel sparsity", metavar="bool")
     global options
     global args
 

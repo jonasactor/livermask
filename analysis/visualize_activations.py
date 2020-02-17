@@ -64,6 +64,7 @@ def predict_viz_model(vizmodel, imgin, m_names, mdict, loc):
             plt.close()
 
         lyr = mdict[layer_name]
+        print(layer_name)
         if isinstance(lyr, keras.layers.Conv2D) or isinstance(lyr, keras.layers.Dense):
             k = lyr.get_weights()[0]
             if isinstance(lyr, keras.layers.Dense):
@@ -72,7 +73,9 @@ def predict_viz_model(vizmodel, imgin, m_names, mdict, loc):
                 klist = [k[:,:,j,0] for j in range(k.shape[2])]
             else:
                 klist = [k[:,:,0,j] for j in range(k.shape[3])]
-            n_cols = 5
+            n_cols = n_features // imgs_per_row
+            if n_cols < 1:
+                n_cols = 1
             display_grid = np.zeros((5 * n_cols, imgs_per_row*5))
             for col in range(n_cols):
                 for row in range(imgs_per_row):
@@ -84,7 +87,7 @@ def predict_viz_model(vizmodel, imgin, m_names, mdict, loc):
             plt.figure(figsize=(scale*display_grid.shape[1], scale*display_grid.shape[0]))
             plt.title(layer_name)
             plt.grid(False)
-            plt.imshow(display_grid, aspect='auto', cmap='gray')
+            plt.imshow(display_grid, aspect='auto', cmap='gray', vmin=-2.0, vmax=2.0)
             plt.savefig(loc+"kernel-"+layer_name+".png", bbox_inches="tight")
             plt.clf()
             plt.close()
@@ -102,13 +105,15 @@ def get_img(imgloc):
 
     return midslice[np.newaxis,:,:,np.newaxis]
 
-imgloc   = '/rsrch1/ip/jacctor/LiTS/LiTS/TrainingBatch2/volume-50.nii'
+imgloc   = '/rsrch1/ip/jacctor/LiTS/LiTS/TrainingBatch2/volume-110.nii'
 img = get_img(imgloc)
 
-outloclist   = [ '/rsrch1/ip/jacctor/livermask/analysis/activations/depthwise-dropout-noreg/',
-                 '/rsrch1/ip/jacctor/livermask/analysis/activations/depthwise-dropout-l1reg/']
-modelloclist = [ '/rsrch1/ip/jacctor/livermask/liverhcc/depthwise-rescon/dropout/005/001/liver/modelunet.h5', 
-                 '/rsrch1/ip/jacctor/livermask/liverhcc/dropout-l1reg/005/001/liver/modelunet.h5']
+outloclist   = [ '/rsrch1/ip/jacctor/livermask/analysis/test_augment/',
+#                 '/rsrch1/ip/jacctor/livermask/analysis/activations/depthwise-dropout-l1reg/',
+                 ]
+modelloclist = [ '/rsrch1/ip/jacctor/livermask/liverhcc/test_augment/005/003/liver/modelunet.h5', 
+#                 '/rsrch1/ip/jacctor/livermask/liverhcc/dropout-l1reg/005/001/liver/modelunet.h5',
+                 ]
 for j in range(len(outloclist)):
     modelloc = modelloclist[j]
     outloc   = outloclist[j]

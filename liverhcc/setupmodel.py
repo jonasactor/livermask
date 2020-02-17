@@ -7,7 +7,7 @@ import keras
 from keras.models import model_from_json, load_model
 from keras.utils.np_utils import to_categorical
 import keras.backend as K
-from keras.callbacks import TensorBoard, TerminateOnNaN, ModelCheckpoint
+from keras.callbacks import TensorBoard, TerminateOnNaN, ModelCheckpoint, ReduceLROnPlateau
 from keras.callbacks import Callback as CallbackBase
 from keras.preprocessing.image import ImageDataGenerator
 from optparse import OptionParser # TODO update to ArgParser (python2 --> python3)
@@ -47,16 +47,21 @@ def GetSetupKfolds(floc, numfolds, idfold):
   if (numfolds > 1):
      kf = KFold(n_splits=numfolds)
      allkfolds   = [ (train_index, test_index) for train_index, test_index in kf.split(dataidsfull )]
-     train_index = allkfolds[idfold][0]
+     train_all_index = allkfolds[idfold][0]
      test_index  = allkfolds[idfold][1]
+     len_train = len(train_all_index)
+     train_index = train_all_index[:int(0.8*len_train)]
+     valid_index = train_all_index[int(0.8*len_train):]
   else:
      train_index = np.array(dataidsfull )
      test_index  = None
+     valid_index = None
   print("kfold: \t",numfolds)
   print("idfold: \t", idfold)
   print("train_index:\t", train_index)
+  print("valid_index:\t", valid_index)
   print("test_index:\t",  test_index)
-  return (train_index,test_index)
+  return (train_index,test_index,valid_index)
 
 
 
@@ -150,6 +155,7 @@ def GetCallbacks(logfileoutputdir, stage):
       callbacks = [ hvd.callbacks.BroadcastGlobalVariablesCallback(0),
                     hvd.callbacks.MetricAverageCallback(),
                     hvd.callbacks.LearningRateWarmupCallback(warmup_epochs=5, verbose=1),
+                    keras.callbacks.ReduceLROnPlateau(monitor='val_dsc_l2', factor=0.5, patience=5, cooldown=5, min_lr=0.0001), 
                     keras.callbacks.TerminateOnNaN()         ]
       if hvd.rank() == 0:
           callbacks += [ keras.callbacks.ModelCheckpoint(filepath=filename, verbose=1, save_best_only=True),
@@ -158,7 +164,8 @@ def GetCallbacks(logfileoutputdir, stage):
   else:
       callbacks = [ keras.callbacks.TerminateOnNaN(),
                     keras.callbacks.CSVLogger(logname),
-                    keras.callbacks.ModelCheckpoint(filepath=filename, verbose=1, save_best_only=True),  
+                    keras.callbacks.ModelCheckpoint(filepath=filename, verbose=1, save_best_only=True), 
+                    keras.callbacks.ReduceLROnPlateau(monitor='val_dsc_l2', factor=0.5, patience=5, cooldown=5, min_lr=0.0001), 
                     keras.callbacks.TensorBoard(log_dir=logdir, histogram_freq=0, write_graph=True, write_images=False)  ] 
   return callbacks, filename
 
@@ -190,10 +197,10 @@ def GetOptimizer():
 
 def GetLoss():
 
-  from mymetrics import dsc, dsc_l2, dsc_int, dsc_int_3D, l1
+  from mymetrics import dsc, dsc_l2, dsc_l2_convex, dsc_int, dsc_int_3D, l1, dsc_crossentropy
 
   lss = dsc_l2
-  met = [dsc_l2, l1, dsc, dsc_int]
+  met = [dsc_l2, dsc, dsc_int]
 
   return lss, met
 
