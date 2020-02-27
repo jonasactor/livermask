@@ -7,10 +7,21 @@ import matplotlib as mptlib
 mptlib.use('TkAgg')
 import matplotlib.pyplot as plt
 
+import math
+from scipy.signal import convolve2d
+
+from preprocess import window
+
+npx = 512
+hu_lb = -50
+hu_ub = 200
 
 def resize_to_nn(img,transpose=True):
-    expected = skimage.transform.resize(img,
-            (256,256,img.shape[2]),
+    if npx==img.shape[1]:
+        expected = img
+    else:
+        expected = skimage.transform.resize(img,
+            (npx,npx,img.shape[2]),
             order=0,
             mode='constant',
             preserve_range=True)
@@ -42,53 +53,124 @@ def reorient(imgloc, segloc=None):
 
     return numpyimage, orig_header, numpyseg
 
-def get_imgs(dbfile  = '/rsrch1/ip/jacctor/livermask/trainingdata_one.csv', rootloc = '/rsrch1/ip/jacctor/LiTS/LiTS'):
+dbfile_mda = '/rsrch1/ip/dtfuentes/github/RandomForestHCCResponse/datalocation/trainingdata.csv'
+rootloc_mda = '/rsrch1/ip/dtfuentes/github/RandomForestHCCResponse'
+def get_imgs(dbfile  = '/rsrch1/ip/jacctor/livermask/trainingdata_small.csv', rootloc = '/rsrch1/ip/jacctor/LiTS/LiTS'):
 
-    imgs = np.empty((0,256,256))
-    segs = np.empty((0,256,256))
+    nscans  = 0
+    nvalid  = 0
+    nslices = 0
 
     with open(dbfile, 'r') as csvfile:
-        myreader = csv.DictReader(csvfile, delimiter=',')
+        myreader=csv.DictReader(csvfile, delimiter='\t')
+
+        for row in myreader:
+            imageloc = '%s/%s' % (rootloc, row['image'])
+            truthloc = '%s/%s' % (rootloc, row['label'])
+            print(imageloc, truthloc)
+            nscans += 1
+            try:
+                npimg, header, npseg = reorient(imageloc, segloc=truthloc)
+                nslices += header['dim'][3]
+                nvalid += 1
+            except nib.filebasedimages.ImageFileError:
+                print("could not read file")
+
+
+    print('done precomputing size:  ', nslices, ' slices, from ', nvalid, ' scans out of ', nscans, ' scans.')
+    imgs = np.empty((nslices,npx,npx))
+    segs = np.empty((nslices,npx,npx))
+
+    sidx = 0
+
+    with open(dbfile, 'r') as csvfile:
+        myreader = csv.DictReader(csvfile, delimiter='\t')
         for row in myreader:
             imageloc = '%s/%s' % (rootloc, row['image'])
             truthloc = '%s/%s' % (rootloc, row['label'])
 
             print(imageloc, truthloc)
 
-            npimg, header, npseg = reorient(imageloc, segloc=truthloc)
+            try:
+                npimg, header, npseg = reorient(imageloc, segloc=truthloc)
 
-            npimg = resize_to_nn(npimg, transpose=True).astype(np.int16)
-            npseg = resize_to_nn(npseg, transpose=True).astype(np.uint8)
+                npimg = resize_to_nn(npimg, transpose=True).astype(np.int16)
+                npseg = resize_to_nn(npseg, transpose=True).astype(np.uint8)
 
-            print(imgs.shape)
-            print(npimg.shape)
-
-            imgs = np.vstack((imgs, npimg))
-            segs = np.vstack((segs, npseg))
-
-            print('imgs\t', imgs.shape)
-            print('segs\t', segs.shape)
+                sss = header['dim'][3]
+                imgs[sidx:sidx+sss,...] = npimg
+                segs[sidx:sidx+sss,...] = npseg
+                sidx += sss
+            except nib.filebasedimages.ImageFileError:
+                print("ignoring the file I could't read earlier")
 
     return imgs, segs
 
-def plot_histogram(data, b=100, r=(-990,990)):
-    counts, bin_edges = np.histogram(data, bins=b, range=r)
-    plt.bar(bin_edges[:-1], counts, width=[0.8*(bin_edges[i+1]-bin_edges[i]) for i in range(len(bin_edges)-1)])
-    plt.show()
+def get_noise_2d(data, k=7):
+    ker = np.ones((k,k))/(k**2) 
+    mean = convolve2d(data,                   ker, mode='same', boundary='fill', fillvalue=0)
+    var  = convolve2d(np.square(data - mean), ker, mode='same', boundary='fill', fillvalue=0)    
+    return mean, np.sqrt(var)
 
-imgs, segs = get_imgs()
-plot_histogram(imgs,r=(-990,990))
+# performs slicewise
+# checking noise over 3d needs to deal with anisotropic voxels
+def get_noise_3d(data3d, k=3):
+    stdev = np.zeros_like(data3d)
+    mean  = np.zeros_like(data3d)
+    nslices = data3d.shape[0]
+    for s in range(nslices):
+        mean[s], stdev[s] = get_noise_2d(data3d[s,...], k=k)
+    return mean, stdev
 
-liver_idx = segs > 0
-tumor_idx = segs > 1
-only_liver_idx = liver_idx * (1.0 - tumor_idx)
+def show_histogram(data, idxlist=None, b=100, r=(-990,990)):
+    if idxlist is not None:
+        for idx in idxlist:
+            to_show = data[idx].flatten()
+            plt.hist(to_show, bins=b, range=r)
+            plt.show()
+            plt.close()
+    else:
+        to_show = data.flatten()
+        plt.hist(to_show, bins=b, range=r)
+        plt.show()
+        plt.close()
 
-imgs_masked = imgs * liver_idx - 300*(1.0 - liver_idx)
-plot_histogram(imgs_masked, r=(-200,400))
+def show_histogram_2D(datax, datay, idxlist=None, b=(100,100), r=[[-990,990],[0,60]]):
+    if idxlist is not None:
+        for idx in idxlist:
+            to_show_x = datax[idx].flatten()
+            to_show_y = datay[idx].flatten()
+            plt.hist2d(to_show_x, to_show_y, bins=b, range=r)
+            plt.show()
+            plt.close()
+    else:
+        plt.hist2d(datax.flatten(), datay.flatten(), bins=b, range=r)
+        plt.show()
+        plt.close()
 
-tumors_masked = imgs * tumor_idx - 300*(1.0 - tumor_idx)
-plot_histogram(tumors_masked, r=(-200,400))
 
-liver_masked = imgs * only_liver_idx - 300*(1.0-only_liver_idx)
-plot_histogram(liver_masked, r=(-200,400))
+def process_std(data, idxlist=None, b=100, r=(-990,990)):
+    mean, stdev = get_noise_3d(data, k=7)
+    show_histogram(stdev, idxlist=idxlist, b=31, r=(0.1,59.9))
+    return mean, stdev
+
+def plot_histogram(data, idxlist=None, b=100, r=(-990,990), do_stdev=True):
+
+    print(data.shape)
+    show_histogram(data, idxlist=idxlist,  b=b, r=r)
+    mean, stdev = process_std(data, idxlist=idxlist, b=b, r=r)
+    show_histogram_2D(data, stdev,  idxlist=idxlist, b=(250,61), r=[[hu_lb+1, hu_ub-1],[0.1,59.9]])
+    return mean, stdev
+
+
+
+imgs, segs = get_imgs(dbfile=dbfile_mda,rootloc=rootloc_mda)
+liver_idx = (segs > 0) * (segs < 5)
+tumor_idx = (segs >= 2) * (segs <= 3) 
+#only_liver_idx = liver_idx * (1.0 - tumor_idx)
+all_idx = np.ones_like(segs, dtype=bool)
+
+#ilist = [all_idx, liver_idx, tumor_idx, only_liver_idx.astype(bool)]
+ilist = [all_idx, liver_idx, tumor_idx]
+plot_histogram(imgs, idxlist=ilist,r=(hu_lb,hu_ub))
 
